@@ -61,6 +61,20 @@ Run one command to instantly review all of your CLI coding agent usage.  Upload 
 ### [Splitrail Cloud](https://splitrail.dev)
 <img width="750" alt="Screenshot of Splitrail Cloud" src="https://raw.githubusercontent.com/Piebald-AI/splitrail/main/screenshots/cloud.png" />
 
+## Local Web Dashboard
+
+Run `splitrail web` and open `http://127.0.0.1:8765` to view usage trends by hour, day, week, month, or year. The dashboard filters by model, project, tool, metric (total, input, output, cached, reasoning tokens, or cost), and time range. Weeks start on Monday. Use `splitrail web --port 9000` to choose another local port. Refresh in the page to reload local usage files. The server only listens on the local loopback address; no usage data is uploaded.
+
+Type in the model, project, or tool field to narrow its choices, then select any number of values. Selections within one field are combined; selections across fields narrow the results together. Remove a selection using its chip, or choose Clear all in that field.
+
+The model, project, and tool lists show only values with nonzero usage for the selected metric and time range. Empty time periods remain on the chart so gaps in usage are visible.
+
+The trend chart draws a total line plus one line for each nonzero combination of the selected projects, models, and tools. Unselected dimensions are combined. Click a line or legend item to focus it, then click again to restore all lines. The breakdown table shows each combination's value for every time period.
+
+Token total uses the same definition as the TUI: input + output + cached tokens. Reasoning tokens are shown separately.
+
+The page supports Chinese and English. It starts in your browser's language when supported, and the language selector remembers your choice in this browser.
+
 ## MCP Server
 
 Splitrail can run as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, allowing AI assistants to query your usage statistics programmatically.
