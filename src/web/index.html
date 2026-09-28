@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Splitrail · 使用趋势</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">S</span><span>Splitrail</span><span class="brand-divider"></span><span class="brand-subtitle" data-i18n="usageTrends">使用趋势</span></div>
+    <div class="header-actions"><label class="language-label" for="language" data-i18n="languageLabel">语言</label><select id="language" aria-label="语言"><option value="zh">中文</option><option value="en">English</option></select><span class="local-badge" data-i18n="localData">本地数据</span></div>
+  </header>
+  <main>
+    <div class="page-heading">
+      <div><p class="eyebrow">USAGE ANALYTICS</p><h1 data-i18n="headline">使用变化，一目了然。</h1><p class="intro" data-i18n="intro">按时间、模型、项目和工具查看 token 使用变化。</p></div>
+      <button id="refresh" class="refresh" type="button" data-i18n="refresh">刷新数据</button>
+    </div>
+    <section class="filters" aria-label="筛选条件" data-i18n-aria="filters">
+      <div class="filter-field"><label for="model" data-i18n="model">模型</label><div class="choice-combobox"><div id="model-selected" class="selected-chips" hidden></div><input id="model" type="search" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="model-options" aria-expanded="false" placeholder="所有模型" data-i18n-placeholder="allModels"><div id="model-options" class="choice-menu" role="listbox" aria-multiselectable="true" hidden></div></div></div>
+      <div class="filter-field"><label for="project" data-i18n="project">项目</label><div class="choice-combobox"><div id="project-selected" class="selected-chips" hidden></div><input id="project" type="search" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="project-options" aria-expanded="false" placeholder="所有项目" data-i18n-placeholder="allProjects"><div id="project-options" class="choice-menu" role="listbox" aria-multiselectable="true" hidden></div></div></div>
+      <div class="filter-field"><label for="tool" data-i18n="tool">工具</label><div class="choice-combobox"><div id="tool-selected" class="selected-chips" hidden></div><input id="tool" type="search" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="tool-options" aria-expanded="false" placeholder="所有工具" data-i18n-placeholder="allTools"><div id="tool-options" class="choice-menu" role="listbox" aria-multiselectable="true" hidden></div></div></div>
+      <label><span data-i18n="metric">指标</span><select id="metric">
+        <option value="total" data-i18n="total">Token 总量</option><option value="cachedTokens" data-i18n="cachedTokens">缓存</option><option value="outputTokens" data-i18n="outputTokens">输出</option><option value="inputTokens" data-i18n="inputTokens">输入</option><option value="reasoningTokens" data-i18n="reasoningTokens">推理</option><option value="cost" data-i18n="cost">成本</option>
+      </select></label>
+      <label><span data-i18n="granularity">统计粒度</span><select id="granularity"><option value="hour" data-i18n="hour">小时</option><option value="day" data-i18n="day" selected>日</option><option value="week" data-i18n="week">周</option><option value="month" data-i18n="month">月</option><option value="year" data-i18n="year">年</option></select></label>
+      <label><span data-i18n="range">时间范围</span><select id="range"><option value="1" data-i18n="last1">今天</option><option value="7" data-i18n="last7">近 7 天</option><option value="30" data-i18n="last30" selected>近 30 天</option><option value="90" data-i18n="last90">近 90 天</option><option value="all" data-i18n="allTime">全部</option></select></label>
+    </section>
+    <p id="status" class="status" role="status" data-i18n="loading">正在读取本地统计数据…</p>
+    <section class="summary" aria-label="统计摘要" data-i18n-aria="summary">
+      <div class="stat-card"><span data-i18n="rangeTotal">所选范围总量</span><strong id="sum">—</strong><small id="sum-unit">tokens</small></div>
+      <div class="stat-card"><span id="average-label">日均使用</span><strong id="average">—</strong><small id="average-unit">tokens / 天</small></div>
+      <div class="stat-card"><span id="peak-label">最高单日</span><strong id="peak">—</strong><small id="peak-date">—</small></div>
+      <div class="stat-card"><span id="active-label">有使用的天数</span><strong id="active-days">—</strong><small id="period-days">—</small></div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><div><p class="eyebrow">USAGE TREND</p><h2 id="chart-title">每日 Token 总量</h2></div><span class="chart-hint" data-i18n="scrollHint">滚动可查看更早日期</span></div>
+      <div id="chart-legend" class="chart-legend" aria-label="折线图图例"></div>
+      <p class="legend-hint" data-i18n="legendHint">点击图例或曲线只看一条，再点恢复全部。</p>
+      <div id="chart" class="chart-scroll" role="img" aria-label="每日使用趋势图" data-i18n-aria="chartAria"></div>
+      <p class="metric-note" data-i18n="metricNote">Token 总量 = 输入 + 输出 + 缓存；推理 token 单独列示，与现有 TUI 口径一致。</p>
+    </section>
+    <section class="panel table-panel">
+      <div class="panel-header"><div><p class="eyebrow">USAGE BREAKDOWN</p><h2 id="details-title">每日明细</h2></div><span id="row-count" class="row-count"></span></div>
+      <div class="table-scroll"><table><thead><tr><th id="period-heading">日期</th><th id="table-metric">Token 总量</th><th data-i18n="inputTokens">输入</th><th data-i18n="outputTokens">输出</th><th data-i18n="cachedTokens">缓存</th><th data-i18n="reasoningTokens">推理</th><th data-i18n="cost">成本</th></tr></thead><tbody id="table-body"></tbody></table></div>
+    </section>
+  </main>
+</body>
+</html>
