@@ -22,7 +22,7 @@ button, select, input { font: inherit; }
 .filters { display: grid; grid-template-columns: 1.1fr 1.6fr 1fr .9fr .9fr .9fr; gap: 13px; padding: 20px; border: 1px solid #e5e9f2; background: #fff; border-radius: 13px; box-shadow: 0 4px 20px #19233a06; }
 .filters > :is(label, .filter-field) { min-width: 0; color: #70798b; font-size: 12px; font-weight: 650; display: flex; flex-direction: column; gap: 8px; }
 .choice-combobox { position: relative; min-width: 0; }
-.selected-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.selected-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; max-height: 120px; overflow-y: auto; }
 .selected-chips[hidden] { display: none; }
 .selected-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; padding: 4px 6px; border: 1px solid #dcdafa; border-radius: 5px; background: #f2f1ff; color: #514bc6; font-size: 11px; cursor: pointer; }
 .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -66,6 +66,11 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.035em; }
 .empty { color: #929aab; text-align: center; padding: 75px 15px; }
 .table-panel { padding-bottom: 4px; }
 .table-scroll { max-height: 510px; overflow: auto; }
+.pagination { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin: 12px 0; color: #70798b; font-size: 12px; }
+.pagination[hidden] { display: none; }
+.pagination span { margin-right: auto; }
+.pagination button { padding: 6px 10px; border: 1px solid #dce1ea; border-radius: 6px; background: #fff; color: #414a62; cursor: pointer; }
+.pagination button:disabled { opacity: .45; cursor: default; }
 table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 13px; font-variant-numeric: tabular-nums; }
 th, td { padding: 12px 13px; text-align: right; border-top: 1px solid #edf0f5; white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; padding-left: 2px; }

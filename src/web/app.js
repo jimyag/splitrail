@@ -1,3 +1,5 @@
+import { TABLE_PAGE_SIZE, metricValue, localDateKey, rangeStart, selectPeriods, pageBounds, usageSeries, chartSamples } from './data.mjs';
+
 const controls = Object.fromEntries(['model', 'project', 'tool', 'metric', 'granularity', 'range'].map(id => [id, document.getElementById(id)]));
 const messages = {
   zh: {
@@ -12,7 +14,9 @@ const messages = {
     trend: (unit, metric) => `按${unit}统计 ${metric}`, details: unit => `按${unit}明细`, averageLabel: unit => `每${unit}平均`,
     peakLabel: unit => `最高单${unit}`, activeLabel: '活跃时段', periodHeading: '时段', periodCount: count => `共 ${count} 个时段`,
     perUnit: (unit, cost) => `${cost ? 'USD' : 'tokens'} / ${unit}`, clearAll: '清除全部', removeFilter: label => `移除 ${label}`,
-    scrollHint: '滚动可查看更早时段', legendHint: '点击图例或曲线只看一条，再点恢复全部。', legendAria: '折线图图例', seriesTotal: '总计',
+    scrollHint: '完整时间范围；密集数据保留峰谷', legendHint: '点击图例或曲线只看一条，再点恢复全部。', legendAria: '折线图图例', seriesTotal: '总计',
+    previous: '上一页', next: '下一页', seriesPages: (first, last, count) => `组合 ${first}–${last} / ${count}（按用量排序）`,
+    tablePages: (page, count) => `第 ${page} / ${count} 页 · 每页最多 100 个时段`,
     chartAria: '每日使用趋势图', metricNote: 'Token 总量 = 输入 + 输出 + 缓存；推理 token 单独列示，与现有 TUI 口径一致。',
     empty: '当前筛选条件下没有使用记录。', unknownModel: '未知模型', unknownProject: '未知项目', noMatches: '没有匹配的选项',
   },
@@ -28,7 +32,9 @@ const messages = {
     trend: (unit, metric) => `${metric} by ${unit.toLowerCase()}`, details: unit => `${unit} details`, averageLabel: unit => `Average per ${unit.toLowerCase()}`,
     peakLabel: unit => `Peak ${unit.toLowerCase()}`, activeLabel: 'Active periods', periodHeading: 'Period', periodCount: count => `${count} ${count === 1 ? 'period' : 'periods'}`,
     perUnit: (unit, cost) => `${cost ? 'USD' : 'tokens'} / ${unit.toLowerCase()}`, clearAll: 'Clear all', removeFilter: label => `Remove ${label}`,
-    scrollHint: 'Scroll to see earlier periods', legendHint: 'Click a legend item or line to show only that series; click again to show all.', legendAria: 'Line chart legend', seriesTotal: 'Total',
+    scrollHint: 'Full range; dense data preserves peaks and troughs', legendHint: 'Click a legend item or line to show only that series; click again to show all.', legendAria: 'Line chart legend', seriesTotal: 'Total',
+    previous: 'Previous', next: 'Next', seriesPages: (first, last, count) => `Combinations ${first}–${last} of ${count} (ranked by usage)`,
+    tablePages: (page, count) => `Page ${page} of ${count} · Up to 100 periods per page`,
     chartAria: 'Daily usage trend chart', metricNote: 'Total tokens = input + output + cached. Reasoning tokens are shown separately, matching the TUI.',
     empty: 'No usage records match these filters.', unknownModel: 'Unknown model', unknownProject: 'Unknown project', noMatches: 'No matching options',
   },
@@ -49,6 +55,8 @@ const selectedFilters = { model: new Set(), project: new Set(), tool: new Set() 
 const menuState = { key: null, values: [], active: 0 };
 let isolatedSeriesId = null;
 let chartState = null;
+let tablePage = 0;
+let seriesPage = 0;
 
 function t(key) { return messages[language][key]; }
 
@@ -85,10 +93,6 @@ function setLanguage(next, persist = false) {
   renderStatus();
   if (loaded) render();
   if (persist) { try { localStorage.setItem('splitrail-web-language', language); } catch { /* The page still works without storage. */ } }
-}
-
-function metricValue(day, metric) {
-  return metric === 'total' ? day.inputTokens + day.outputTokens + day.cachedTokens : day[metric];
 }
 
 function format(value, metric) {
@@ -200,34 +204,12 @@ function handleChoiceInput(key) {
   showMenu(key, controls[key].value);
 }
 
-function localDateKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function rangeStart() {
-  if (controls.range.value === 'all') return null;
-  const today = new Date();
-  const cutoff = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  cutoff.setDate(cutoff.getDate() - Number(controls.range.value) + 1);
-  return localDateKey(cutoff);
-}
-
 function refreshChoices() {
-  const first = rangeStart();
+  const first = rangeStart(controls.range.value);
   const last = localDateKey(new Date());
   const available = rows.filter(row =>
     (!first || row.date >= first) && row.date <= last && metricValue(row, controls.metric.value) > 0);
   for (const key of ['model', 'project', 'tool']) updateChoices(key, new Set(available.map(row => row[key])));
-}
-
-function periodKey(date, hour, granularity) {
-  if (granularity === 'hour') return `${date}T${String(hour).padStart(2, '0')}`;
-  if (granularity === 'day') return date;
-  if (granularity === 'month') return date.slice(0, 7);
-  if (granularity === 'year') return date.slice(0, 4);
-  const monday = new Date(`${date}T12:00:00`);
-  monday.setDate(monday.getDate() - (monday.getDay() + 6) % 7);
-  return localDateKey(monday);
 }
 
 function periodLabel(key, granularity, short = false) {
@@ -244,52 +226,6 @@ function periodLabel(key, granularity, short = false) {
   }
   if (granularity === 'month') return monthDate.format(new Date(`${key}-01T12:00:00`));
   return key;
-}
-
-function emptyPeriod(key) {
-  return { key, inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, cost: 0 };
-}
-
-function selectedPeriods() {
-  const filtered = rows.filter(row =>
-    (!selectedFilters.model.size || selectedFilters.model.has(row.model)) &&
-    (!selectedFilters.project.size || selectedFilters.project.has(row.project)) &&
-    (!selectedFilters.tool.size || selectedFilters.tool.has(row.tool)));
-  const granularity = controls.granularity.value;
-  const today = new Date();
-  const rangeFirst = rangeStart();
-  const first = controls.range.value === 'all'
-    ? filtered.reduce((min, row) => !min || row.date < min ? row.date : min, '')
-    : rangeFirst;
-  const last = localDateKey(today);
-  if (!first) return { periods: [], selectedRows: [] };
-  const periods = new Map();
-  const selectedRows = [];
-  const cursor = new Date(`${first}T12:00:00`);
-  const end = new Date(`${last}T12:00:00`);
-  while (cursor <= end) {
-    const date = localDateKey(cursor);
-    if (granularity === 'hour') {
-      const lastHour = date === last ? today.getHours() : 23;
-      for (let hour = 0; hour <= lastHour; hour++) {
-        const key = periodKey(date, hour, granularity);
-        periods.set(key, emptyPeriod(key));
-      }
-    } else {
-      const key = periodKey(date, 0, granularity);
-      if (!periods.has(key)) periods.set(key, emptyPeriod(key));
-    }
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  for (const row of filtered) {
-    if (row.date < first || row.date > last) continue;
-    const key = periodKey(row.date, row.hour, granularity);
-    const period = periods.get(key);
-    if (!period) continue;
-    selectedRows.push(row);
-    for (const field of ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens', 'cost']) period[field] += row[field];
-  }
-  return { periods: [...periods.values()], selectedRows };
 }
 
 function svgElement(name, attrs = {}, content) {
@@ -316,29 +252,23 @@ function renderLabels() {
 
 function groupedSeries(periods, selectedRows, metric, granularity) {
   const dimensions = ['project', 'model', 'tool'].filter(key => selectedFilters[key].size);
-  const periodIndexes = new Map(periods.map((period, index) => [period.key, index]));
-  const groups = new Map();
-  for (const row of selectedRows) {
-    const value = metricValue(row, metric);
-    if (value <= 0 || !dimensions.length) continue;
-    const index = periodIndexes.get(periodKey(row.date, row.hour, granularity));
-    if (index === undefined) continue;
-    const values = dimensions.map(key => [key, row[key]]);
-    const id = JSON.stringify(values);
-    if (!groups.has(id)) groups.set(id, {
-      id,
-      label: values.map(([key, item]) => `${t(key)}: ${choiceLabel(key, item)}`).join(' · '),
-      displayLabel: values.map(([key, item]) => {
-        const label = choiceLabel(key, item);
-        const shortPath = key === 'project' && item ? item.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : '';
-        return `${t(key)}: ${shortPath || label}`;
-      }).join(' · '),
-      values: Array(periods.length).fill(0),
-    });
-    groups.get(id).values[index] += value;
-  }
+  const { groups, combinationCount, bounds } = usageSeries(periods, selectedRows, metric, granularity, dimensions, seriesPage);
+  seriesPage = bounds.page;
+  const pager = document.getElementById('series-pagination');
+  pager.hidden = combinationCount === 0;
+  document.getElementById('series-page').textContent = t('seriesPages')(bounds.start + 1, bounds.end, combinationCount);
+  document.getElementById('series-previous').disabled = seriesPage === 0;
+  document.getElementById('series-next').disabled = seriesPage + 1 === bounds.count;
+  const combinations = groups.map(group => ({
+    ...group,
+    label: group.dimensions.map(([key, item]) => `${t(key)}: ${choiceLabel(key, item)}`).join(' · '),
+    displayLabel: group.dimensions.map(([key, item]) => {
+      const label = choiceLabel(key, item);
+      const shortPath = key === 'project' && item ? item.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : '';
+      return `${t(key)}: ${shortPath || label}`;
+    }).join(' · '),
+  }));
   const palette = ['#d05a51', '#238a80', '#ce8b22', '#8a62bd', '#3778bd', '#a9558c', '#73933d', '#bd6b42'];
-  const combinations = [...groups.values()].sort((a, b) => a.label.localeCompare(b.label, language === 'zh' ? 'zh-CN' : 'en-US'));
   combinations.forEach((series, index) => { series.color = palette[index % palette.length]; });
   return [{ id: 'total', label: t('seriesTotal'), displayLabel: t('seriesTotal'), color: '#514bc6', values: periods.map(period => metricValue(period, metric)) }, ...combinations];
 }
@@ -361,7 +291,7 @@ function renderChart(periods, series, metric, granularity, preserveScroll = fals
     container.append(empty);
     return;
   }
-  const width = Math.max(760, periods.length * (granularity === 'hour' ? 14 : 26) + 72);
+  const width = Math.max(760, container.clientWidth);
   const height = 280;
   const left = 110, right = 24, top = 24, bottom = 42;
   const plotWidth = width - left - right, plotHeight = height - top - bottom;
@@ -396,7 +326,8 @@ function renderChart(periods, series, metric, granularity, preserveScroll = fals
     button.addEventListener('click', () => isolateSeries(item.id));
     legend.append(button);
     if (isolatedSeriesId && isolatedSeriesId !== item.id) continue;
-    const points = item.values.map((value, index) => ({
+    const points = chartSamples(item.values).map(({ value, index }) => ({
+      index,
       x: left + (index + 0.5) * plotWidth / periods.length,
       y: top + plotHeight - value / max * plotHeight,
     }));
@@ -406,9 +337,9 @@ function renderChart(periods, series, metric, granularity, preserveScroll = fals
     hit.append(svgElement('title', {}, item.label));
     hit.addEventListener('click', () => isolateSeries(item.id));
     svg.append(hit);
-    if (periods.length <= 90) points.forEach((point, index) => {
+    if (periods.length <= 90) points.forEach(point => {
       const circle = svgElement('circle', { cx: point.x, cy: point.y, r: 3.5, fill: item.color, class: 'series-point' });
-      circle.append(svgElement('title', {}, `${item.label} · ${periodLabel(periods[index].key, granularity)} · ${format(item.values[index], metric)}`));
+      circle.append(svgElement('title', {}, `${item.label} · ${periodLabel(periods[point.index].key, granularity)} · ${format(item.values[point.index], metric)}`));
       circle.addEventListener('click', () => isolateSeries(item.id));
       svg.append(circle);
     });
@@ -423,6 +354,12 @@ function renderTable(periods, series, metric, granularity) {
   document.getElementById('row-count').textContent = t('periodCount')(periods.length);
   document.querySelectorAll('th.series-column').forEach(header => header.remove());
   const combinations = series.slice(1);
+  const bounds = pageBounds(periods.length, tablePage, TABLE_PAGE_SIZE);
+  tablePage = bounds.page;
+  document.getElementById('table-pagination').hidden = periods.length === 0;
+  document.getElementById('table-page').textContent = t('tablePages')(tablePage + 1, bounds.count);
+  document.getElementById('table-previous').disabled = tablePage === 0;
+  document.getElementById('table-next').disabled = tablePage + 1 === bounds.count;
   let previous = document.getElementById('table-metric');
   for (const item of combinations) {
     const header = document.createElement('th');
@@ -432,7 +369,7 @@ function renderTable(periods, series, metric, granularity) {
     previous.after(header);
     previous = header;
   }
-  for (let index = periods.length - 1; index >= 0; index--) {
+  for (let index = periods.length - 1 - bounds.start; index >= periods.length - bounds.end; index--) {
     const period = periods[index];
     const tr = document.createElement('tr');
     const values = [periodLabel(period.key, granularity), format(metricValue(period, metric), metric),
@@ -445,12 +382,14 @@ function renderTable(periods, series, metric, granularity) {
     }
     body.append(tr);
   }
+  document.querySelector('.table-scroll').scrollTop = 0;
 }
 
-function render() {
+function render(resetPages = true) {
+  if (resetPages) { tablePage = 0; seriesPage = 0; }
   const metric = controls.metric.value;
   const granularity = controls.granularity.value;
-  const { periods, selectedRows } = selectedPeriods();
+  const { periods, selectedRows } = selectPeriods(rows, selectedFilters, granularity, controls.range.value);
   const series = groupedSeries(periods, selectedRows, metric, granularity);
   if (isolatedSeriesId && !series.some(item => item.id === isolatedSeriesId)) isolatedSeriesId = null;
   const values = periods.map(period => metricValue(period, metric));
@@ -470,13 +409,13 @@ function render() {
   renderTable(periods, series, metric, granularity);
 }
 
-async function load() {
+async function load(refreshData = false) {
   const refresh = document.getElementById('refresh');
   refresh.disabled = true;
   statusState = { kind: 'loading' };
   renderStatus();
   try {
-    const response = await fetch('/api/usage', { cache: 'no-store' });
+    const response = await fetch(`/api/usage${refreshData ? '?refresh=true' : ''}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     rows = await response.json();
     refreshChoices();
@@ -512,8 +451,17 @@ for (const key of ['model', 'project', 'tool']) {
   controls[key].addEventListener('blur', () => hideMenu(key));
 }
 for (const key of ['metric', 'range']) controls[key].addEventListener('change', () => { refreshChoices(); render(); });
-controls.granularity.addEventListener('change', render);
+controls.granularity.addEventListener('change', () => render());
 document.getElementById('language').addEventListener('change', event => setLanguage(event.target.value, true));
-document.getElementById('refresh').addEventListener('click', load);
+document.getElementById('refresh').addEventListener('click', () => load(true));
+for (const [id, step] of [['series-previous', -1], ['series-next', 1]]) document.getElementById(id).addEventListener('click', () => {
+  seriesPage += step;
+  isolatedSeriesId = null;
+  render(false);
+});
+for (const [id, step] of [['table-previous', -1], ['table-next', 1]]) document.getElementById(id).addEventListener('click', () => {
+  tablePage += step;
+  renderTable(chartState.periods, chartState.series, chartState.metric, chartState.granularity);
+});
 setLanguage(language);
 load();

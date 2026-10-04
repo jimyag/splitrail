@@ -7,7 +7,7 @@
   <title>Splitrail · 使用趋势</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
+  <script src="/app.js" type="module"></script>
 </head>
 <body>
   <header class="topbar">
@@ -37,7 +37,8 @@
       <div class="stat-card"><span id="active-label">有使用的天数</span><strong id="active-days">—</strong><small id="period-days">—</small></div>
     </section>
     <section class="panel">
-      <div class="panel-header"><div><p class="eyebrow">USAGE TREND</p><h2 id="chart-title">每日 Token 总量</h2></div><span class="chart-hint" data-i18n="scrollHint">滚动可查看更早日期</span></div>
+      <div class="panel-header"><div><p class="eyebrow">USAGE TREND</p><h2 id="chart-title">每日 Token 总量</h2></div><span class="chart-hint" data-i18n="scrollHint">完整时间范围；密集数据保留峰谷</span></div>
+      <div id="series-pagination" class="pagination" hidden><span id="series-page" role="status"></span><button id="series-previous" type="button" data-i18n="previous">上一页</button><button id="series-next" type="button" data-i18n="next">下一页</button></div>
       <div id="chart-legend" class="chart-legend" aria-label="折线图图例"></div>
       <p class="legend-hint" data-i18n="legendHint">点击图例或曲线只看一条，再点恢复全部。</p>
       <div id="chart" class="chart-scroll" role="img" aria-label="每日使用趋势图" data-i18n-aria="chartAria"></div>
@@ -46,6 +47,7 @@
     <section class="panel table-panel">
       <div class="panel-header"><div><p class="eyebrow">USAGE BREAKDOWN</p><h2 id="details-title">每日明细</h2></div><span id="row-count" class="row-count"></span></div>
       <div class="table-scroll"><table><thead><tr><th id="period-heading">日期</th><th id="table-metric">Token 总量</th><th data-i18n="inputTokens">输入</th><th data-i18n="outputTokens">输出</th><th data-i18n="cachedTokens">缓存</th><th data-i18n="reasoningTokens">推理</th><th data-i18n="cost">成本</th></tr></thead><tbody id="table-body"></tbody></table></div>
+      <div id="table-pagination" class="pagination" hidden><span id="table-page" role="status"></span><button id="table-previous" type="button" data-i18n="previous">上一页</button><button id="table-next" type="button" data-i18n="next">下一页</button></div>
     </section>
   </main>
 </body>
