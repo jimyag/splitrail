@@ -1,4 +1,4 @@
-import { TABLE_PAGE_SIZE, metricValue, localDateKey, rangeStart, selectPeriods, pageBounds, usageSeries, chartSamples } from './data.mjs';
+import { metricValue, localDateKey, rangeStart, selectPeriods, detailPage, usageSeries, chartSamples } from './data.mjs';
 
 const controls = Object.fromEntries(['model', 'project', 'tool', 'metric', 'granularity', 'range'].map(id => [id, document.getElementById(id)]));
 const messages = {
@@ -351,12 +351,12 @@ function renderChart(periods, series, metric, granularity, preserveScroll = fals
 function renderTable(periods, series, metric, granularity) {
   const body = document.getElementById('table-body');
   body.replaceChildren();
-  document.getElementById('row-count').textContent = t('periodCount')(periods.length);
+  const { indexes, total, bounds } = detailPage(periods, metric, tablePage);
+  document.getElementById('row-count').textContent = t('periodCount')(total);
   document.querySelectorAll('th.series-column').forEach(header => header.remove());
   const combinations = series.slice(1);
-  const bounds = pageBounds(periods.length, tablePage, TABLE_PAGE_SIZE);
   tablePage = bounds.page;
-  document.getElementById('table-pagination').hidden = periods.length === 0;
+  document.getElementById('table-pagination').hidden = total === 0;
   document.getElementById('table-page').textContent = t('tablePages')(tablePage + 1, bounds.count);
   document.getElementById('table-previous').disabled = tablePage === 0;
   document.getElementById('table-next').disabled = tablePage + 1 === bounds.count;
@@ -369,7 +369,7 @@ function renderTable(periods, series, metric, granularity) {
     previous.after(header);
     previous = header;
   }
-  for (let index = periods.length - 1 - bounds.start; index >= periods.length - bounds.end; index--) {
+  for (const index of indexes) {
     const period = periods[index];
     const tr = document.createElement('tr');
     const values = [periodLabel(period.key, granularity), format(metricValue(period, metric), metric),

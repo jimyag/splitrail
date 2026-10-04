@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TABLE_PAGE_SIZE, SERIES_PAGE_SIZE, metricValue, periodKey, selectPeriods, pageBounds, usageSeries, chartSamples } from './data.mjs';
+import { TABLE_PAGE_SIZE, SERIES_PAGE_SIZE, metricValue, periodKey, selectPeriods, pageBounds, detailPage, usageSeries, chartSamples } from './data.mjs';
 
 const row = (overrides = {}) => ({
   date: '2025-12-31', hour: 23, model: 'a', project: 'p', tool: 't',
@@ -91,4 +91,24 @@ test('dense chart sampling stays bounded and preserves endpoints and isolated ex
   assert.ok(samples.some(sample => sample.index === 6789 && sample.value === 0));
   assert.ok(samples.every((sample, index) => index === 0 || sample.index > samples[index - 1].index));
   assert.deepEqual(chartSamples([1, 0, 3]), [{ index: 0, value: 1 }, { index: 1, value: 0 }, { index: 2, value: 3 }]);
+});
+
+test('detail pages omit zero usage and preserve original series indexes', () => {
+  const periods = Array.from({ length: 305 }, (_, index) => row({
+    inputTokens: index % 2 === 0 ? index + 1 : 0,
+    outputTokens: 0, cachedTokens: 0, reasoningTokens: index === 1 ? 7 : 0, cost: index === 3 ? 0.5 : 0,
+  }));
+  const first = detailPage(periods, 'total', 0);
+  const second = detailPage(periods, 'total', 1);
+  assert.equal(first.total, 153);
+  assert.equal(first.bounds.count, 2);
+  assert.equal(first.indexes.length, 100);
+  assert.equal(second.indexes.length, 53);
+  assert.deepEqual([...first.indexes, ...second.indexes], Array.from({ length: 153 }, (_, index) => 304 - index * 2));
+  assert.deepEqual(detailPage(periods, 'reasoningTokens', 0).indexes, [1]);
+  assert.deepEqual(detailPage(periods, 'cost', 0).indexes, [3]);
+  const empty = detailPage(periods, 'outputTokens', 99);
+  assert.equal(empty.total, 0);
+  assert.equal(empty.bounds.page, 0);
+  assert.deepEqual(empty.indexes, []);
 });

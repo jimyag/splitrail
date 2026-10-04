@@ -65,6 +65,15 @@ export function pageBounds(length, page, size) {
   return { page, count, start: page * size, end: Math.min(length, (page + 1) * size) };
 }
 
+export function detailPage(periods, metric, page) {
+  const indexes = [];
+  for (let index = periods.length - 1; index >= 0; index--) {
+    if (metricValue(periods[index], metric) > 0) indexes.push(index);
+  }
+  const bounds = pageBounds(indexes.length, page, TABLE_PAGE_SIZE);
+  return { indexes: indexes.slice(bounds.start, bounds.end), total: indexes.length, bounds };
+}
+
 export function usageSeries(periods, rows, metric, granularity, dimensions, page) {
   const groups = new Map();
   if (dimensions.length) for (const row of rows) {

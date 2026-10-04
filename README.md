@@ -71,7 +71,7 @@ The model, project, and tool lists show only values with nonzero usage for the s
 
 The trend chart draws a total line plus up to 12 nonzero combinations of the selected projects, models, and tools, ranked by usage. Use the combination page controls to view the remaining combinations. Unselected dimensions are combined. Click a line or legend item to focus it, then click again to restore all lines on the current page. The chart fits the full selected time range and preserves peaks and troughs when reducing dense data. Summary values and the total line always include all matching usage.
 
-The breakdown table shows the current combinations and exact values for every time period, with 100 periods per page, newest first. Changing filters resets pagination.
+The breakdown table shows the current combinations and exact values for periods with nonzero usage in the selected metric, with 100 periods per page, newest first. Its period count and pagination exclude zero-usage periods. Changing filters resets pagination.
 
 Frontend data tests run with `node --test src/web/data.test.mjs`; Node is only needed for these tests, not for building or running Splitrail.
 
