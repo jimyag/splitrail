@@ -1,467 +1,1067 @@
-import { metricValue, localDateKey, rangeStart, selectPeriods, detailPage, usageSeries, chartSamples } from './data.mjs';
+import {
+  OTHER, SESSION_PAGE_SIZE, rowTokens, localDateKey, shiftDate, periodKey, selectRange, inRange, matchesFilters,
+  granularityOptions, bucketKeys, sumRows, groupRows, totalTokens, cacheShare, colorSlots, stackedSeries,
+  weekdayHourGrid, niceStep, topTenthShare, median,
+} from './data.mjs';
 
-const controls = Object.fromEntries(['model', 'project', 'tool', 'metric', 'granularity', 'range'].map(id => [id, document.getElementById(id)]));
+const DIMENSIONS = ['tool', 'model', 'project'];
+const VIEWS = ['overview', 'sessions', 'breakdown'];
+const RANGES = ['today', '7', '30', '90', 'all'];
+const RANGE_LABELS = { today: 'today', 7: 'last7', 30: 'last30', 90: 'last90', all: 'all' };
+const METRICS = ['cost', 'tokens'];
+const SORTS = ['recent', 'cost', 'tokens', 'duration'];
+const BREAKDOWNS = ['period', 'project', 'model', 'tool'];
+const GRANULARITIES = ['hour', 'day', 'week', 'month'];
+const PLOT_HEIGHT = 240;
+const TIMELINE_HEIGHT = 88;
+// Narrowest bar slot in px; charts with more buckets scroll sideways.
+const MIN_SLOT = 4;
+const LANGUAGE_KEY = 'splitrail-web-language';
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
 const messages = {
   zh: {
-    title: 'Splitrail · 使用趋势', usageTrends: '使用趋势', languageLabel: '语言', localData: '本地数据',
-    headline: '使用变化，一目了然。', intro: '按时间、模型、项目和工具查看 token 使用变化。', refresh: '刷新数据',
-    filters: '筛选条件', model: '模型', allModels: '所有模型', project: '项目', allProjects: '所有项目',
-    tool: '工具', allTools: '所有工具', metric: '指标', granularity: '统计粒度', hour: '小时', day: '日', week: '周', month: '月', year: '年',
-    range: '时间范围', last1: '今天', last7: '近 7 天', last30: '近 30 天', last90: '近 90 天', allTime: '全部',
-    total: 'Token 总量', cachedTokens: '缓存', outputTokens: '输出', inputTokens: '输入', reasoningTokens: '推理', cost: '成本',
-    loading: '正在读取本地统计数据…', loaded: count => `已读取 ${number.format(count)} 条小时模型 / 项目记录`, noData: '本机暂无可用的使用记录。',
-    loadError: detail => `读取失败：${detail}`, summary: '统计摘要', rangeTotal: '所选范围总量',
-    trend: (unit, metric) => `按${unit}统计 ${metric}`, details: unit => `按${unit}明细`, averageLabel: unit => `每${unit}平均`,
-    peakLabel: unit => `最高单${unit}`, activeLabel: '活跃时段', periodHeading: '时段', periodCount: count => `共 ${count} 个时段`,
-    perUnit: (unit, cost) => `${cost ? 'USD' : 'tokens'} / ${unit}`, clearAll: '清除全部', removeFilter: label => `移除 ${label}`,
-    scrollHint: '完整时间范围；密集数据保留峰谷', legendHint: '点击图例或曲线只看一条，再点恢复全部。', legendAria: '折线图图例', seriesTotal: '总计',
-    previous: '上一页', next: '下一页', seriesPages: (first, last, count) => `组合 ${first}–${last} / ${count}（按用量排序）`,
-    tablePages: (page, count) => `第 ${page} / ${count} 页 · 每页最多 100 个时段`,
-    chartAria: '每日使用趋势图', metricNote: 'Token 总量 = 输入 + 输出 + 缓存；推理 token 单独列示，与现有 TUI 口径一致。',
-    empty: '当前筛选条件下没有使用记录。', unknownModel: '未知模型', unknownProject: '未知项目', noMatches: '没有匹配的选项',
+    title: 'Splitrail · 本地用量', localUsage: '本地用量', refresh: '刷新', language: '语言', views: '视图',
+    summary: '关键指标', rankings: '排行', overview: '概览', sessions: '会话', breakdown: '明细',
+    loading: '正在读取本地用量…', scanning: '正在扫描…', loadError: detail => `读取失败：${detail}`, noData: '本机暂无可用的使用记录。',
+    scanned: (time, tools, sessions) => `仅本机 · 扫描于 ${time} · ${tools} 个工具 · ${sessions} 个会话`,
+    range: '时间范围', today: '今天', last7: '7 天', last30: '30 天', last90: '90 天', all: '全部',
+    lastDays: days => `近 ${days} 天`, allDays: days => `全部（${days} 天）`,
+    vsPrevious: days => `较前 ${days} 天`, vsYesterday: '较昨日同时段', vsPreviousDay: '较前一天',
+    hourly: '按小时', clearDrill: '退出单日视图',
+    tool: '工具', model: '模型', project: '项目', period: '时段',
+    searchIn: name => `搜索${name}`, noMatches: '没有匹配的选项', clearSelection: '清除选择',
+    removeFilter: name => `移除筛选：${name}`, clearFilters: '清除筛选',
+    metric: '指标', cost: '成本', tokens: 'Token',
+    estimatedCost: '估算成本（按 API 价）', totalTokens: 'Token 总量', cacheShare: '缓存占比',
+    noComparison: '全部历史，没有对比周期', previousZero: '上一周期为 0', unchanged: '持平', points: '个百分点',
+    dailyAverage: (cost, active, days) => `日均 ${cost} · ${active} / ${days} 天有使用`, asOf: time => `截至 ${time}`, wholeDay: '当天合计',
+    sessionsSub: (duration, replies) => `中位时长 ${duration} · ${replies} 条回复`, noSessions: '没有会话',
+    cacheSub: '输入侧 token 中由缓存提供的比例',
+    cached: '缓存', input: '输入', output: '输出', reasoning: '推理',
+    costMayBeLow: '成本可能偏低', unpriced: (models, tokens) => `${models} 的 ${tokens} token 成本为 $0，可能缺少价格。`, listSeparator: '、',
+    viewInBreakdown: '在明细中查看',
+    every: { hour: '每小时', day: '每日', week: '每周', month: '每月' },
+    trendTitle: (every, metric) => `${every}${metric === 'cost' ? '成本' : ' Token'}`,
+    stackedBy: (dimension, range) => `按${dimension}堆叠 · ${range}`,
+    group: '分组', interval: '粒度', intervals: { hour: '小时', day: '日', week: '周', month: '月' }, viewTable: '以表格查看',
+    drillHint: '点击柱子下钻到当天，按小时查看。', emptyRange: '所选范围和筛选下没有用量',
+    chartLabel: title => `${title}。用左右方向键逐个查看时段，回车下钻。`,
+    other: '其他', unknownModel: '未知模型', unknownProject: '未知项目',
+    clickToFilter: '点一行加入筛选', allOf: (count, name) => `全部 ${count} 个${name} →`,
+    perMillion: price => `${price}/M`, noPrice: '未定价', cacheShort: share => `缓存 ${share}`,
+    sessionCount: count => `${count} 个会话`, lastActive: date => `最近 ${date}`, mergedPaths: count => `合并 ${count} 个目录`,
+    rhythm: '工作节奏', peak: (day, hour) => `高峰：${day} ${hour}:00`, noUsage: '没有用量', less: '少', more: '多',
+    rhythmNote: '按本地时间，星期 × 小时', rhythmLabel: '按星期和小时的用量热力图。用方向键逐格查看。',
+    shareOfRange: share => `占所选范围 ${share}`, tokenCount: count => `${count} token`,
+    topByCost: '成本最高的会话', topByTokens: 'Token 最多的会话',
+    concentration: (count, share) => `前 10% 的会话（${count} 个）占 ${share} 成本`, viewAllSessions: '查看全部会话',
+    searchSessions: '搜索会话名、项目或工具', sort: '排序', recent: '最近', durationLabel: '时长',
+    sessionCountIn: (count, range) => `${count} 个会话 · ${range}`,
+    session: '会话', started: '开始', replies: '回复', models: '模型',
+    showing: (shown, total) => `显示 ${shown} / ${total}`, loadMore: '加载更多', noMatchingSessions: '没有匹配的会话',
+    untitled: '未命名会话', sessionDetails: '会话详情 · 整个会话', tokensPerHour: '每小时 Token', tokensPerDay: '每日 Token',
+    stackedByModel: '按模型堆叠', tokenMix: 'Token 构成', toolCalls: '工具调用', replyCount: count => `${count} 条`,
+    copy: '复制 ID', copied: '已复制', onlyThisProject: '只看这个项目', selectSession: '选择一个会话查看详情。',
+    by: '按', periodBy: interval => `时段（按${interval}）`, rowsIn: (count, range) => `${count} 行 · ${range}`,
+    onlyActivePeriods: '只列有用量的时段', shareOfCost: '成本占比', shareOfTokens: 'Token 占比', averagePrice: '均价 / 1M', total: '合计',
+    sortedBy: { cost: '按成本排序', tokens: '按 Token 排序' },
+    minutes: minutes => `${minutes} 分钟`, hoursMinutes: (hours, minutes) => `${hours} 小时${minutes ? ` ${minutes} 分` : ''}`,
+    metricNote: 'Token 总量 = 输入 + 输出 + 缓存，与 TUI 口径一致；推理 token 单独列示。成本按各模型公开 API 价格估算，订阅用户的实际支出可能不同。',
   },
   en: {
-    title: 'Splitrail · Usage Trends', usageTrends: 'Usage Trends', languageLabel: 'Language', localData: 'Local data',
-    headline: 'Your usage over time, at a glance.', intro: 'Explore token usage by time, model, project, and tool.', refresh: 'Refresh data',
-    filters: 'Filters', model: 'Model', allModels: 'All models', project: 'Project', allProjects: 'All projects',
-    tool: 'Tool', allTools: 'All tools', metric: 'Metric', granularity: 'Group by', hour: 'Hour', day: 'Day', week: 'Week', month: 'Month', year: 'Year',
-    range: 'Time range', last1: 'Today', last7: 'Last 7 days', last30: 'Last 30 days', last90: 'Last 90 days', allTime: 'All time',
-    total: 'Total tokens', cachedTokens: 'Cached tokens', outputTokens: 'Output tokens', inputTokens: 'Input tokens', reasoningTokens: 'Reasoning tokens', cost: 'Cost',
-    loading: 'Loading local usage data…', loaded: count => `Loaded ${number.format(count)} hourly model/project records`, noData: 'No local usage records found.',
-    loadError: detail => `Could not load data: ${detail}`, summary: 'Summary', rangeTotal: 'Total in range',
-    trend: (unit, metric) => `${metric} by ${unit.toLowerCase()}`, details: unit => `${unit} details`, averageLabel: unit => `Average per ${unit.toLowerCase()}`,
-    peakLabel: unit => `Peak ${unit.toLowerCase()}`, activeLabel: 'Active periods', periodHeading: 'Period', periodCount: count => `${count} ${count === 1 ? 'period' : 'periods'}`,
-    perUnit: (unit, cost) => `${cost ? 'USD' : 'tokens'} / ${unit.toLowerCase()}`, clearAll: 'Clear all', removeFilter: label => `Remove ${label}`,
-    scrollHint: 'Full range; dense data preserves peaks and troughs', legendHint: 'Click a legend item or line to show only that series; click again to show all.', legendAria: 'Line chart legend', seriesTotal: 'Total',
-    previous: 'Previous', next: 'Next', seriesPages: (first, last, count) => `Combinations ${first}–${last} of ${count} (ranked by usage)`,
-    tablePages: (page, count) => `Page ${page} of ${count} · Up to 100 periods per page`,
-    chartAria: 'Daily usage trend chart', metricNote: 'Total tokens = input + output + cached. Reasoning tokens are shown separately, matching the TUI.',
-    empty: 'No usage records match these filters.', unknownModel: 'Unknown model', unknownProject: 'Unknown project', noMatches: 'No matching options',
+    title: 'Splitrail · Local usage', localUsage: 'Local usage', refresh: 'Refresh', language: 'Language', views: 'Views',
+    summary: 'Key figures', rankings: 'Rankings', overview: 'Overview', sessions: 'Sessions', breakdown: 'Breakdown',
+    loading: 'Loading local usage…', scanning: 'Scanning…', loadError: detail => `Could not load data: ${detail}`, noData: 'No local usage records found.',
+    scanned: (time, tools, sessions) => `Local only · scanned ${time} · ${tools} tools · ${sessions} sessions`,
+    range: 'Time range', today: 'Today', last7: '7 days', last30: '30 days', last90: '90 days', all: 'All',
+    lastDays: days => `Last ${days} days`, allDays: days => `All time (${days} days)`,
+    vsPrevious: days => `vs previous ${days} days`, vsYesterday: 'vs yesterday so far', vsPreviousDay: 'vs previous day',
+    hourly: 'hourly', clearDrill: 'Leave day view',
+    tool: 'Tool', model: 'Model', project: 'Project', period: 'Period',
+    searchIn: name => `Filter ${name.toLowerCase()}s`, noMatches: 'No matches', clearSelection: 'Clear selection',
+    removeFilter: name => `Remove filter: ${name}`, clearFilters: 'Clear filters',
+    metric: 'Metric', cost: 'Cost', tokens: 'Tokens',
+    estimatedCost: 'Estimated cost (API prices)', totalTokens: 'Total tokens', cacheShare: 'Cache share',
+    noComparison: 'All history, nothing to compare', previousZero: 'previous period was 0', unchanged: 'unchanged', points: 'pts',
+    dailyAverage: (cost, active, days) => `${cost} per day · active ${active} of ${days} days`, asOf: time => `As of ${time}`, wholeDay: 'Whole day',
+    sessionsSub: (duration, replies) => `Median ${duration} · ${replies} replies`, noSessions: 'No sessions',
+    cacheSub: 'Share of prompt tokens served from cache',
+    cached: 'Cached', input: 'Input', output: 'Output', reasoning: 'Reasoning',
+    costMayBeLow: 'Cost may be understated', unpriced: (models, tokens) => `${tokens} tokens from ${models} are priced at $0, likely missing prices.`,
+    listSeparator: ', ', viewInBreakdown: 'View in breakdown',
+    every: { hour: 'Hourly', day: 'Daily', week: 'Weekly', month: 'Monthly' },
+    trendTitle: (every, metric) => `${every} ${metric === 'cost' ? 'cost' : 'tokens'}`,
+    stackedBy: (dimension, range) => `Stacked by ${dimension.toLowerCase()} · ${range}`,
+    group: 'Group', interval: 'Interval', intervals: { hour: 'Hour', day: 'Day', week: 'Week', month: 'Month' }, viewTable: 'View as table',
+    drillHint: 'Click a bar to drill into that day by hour.', emptyRange: 'No usage for this range and filters',
+    chartLabel: title => `${title}. Use the arrow keys to read each period and Enter to drill in.`,
+    other: 'Other', unknownModel: 'Unknown model', unknownProject: 'Unknown project',
+    clickToFilter: 'Click a row to filter', allOf: (count, name) => `All ${count} ${name.toLowerCase()}s →`,
+    perMillion: price => `${price}/M`, noPrice: 'No price', cacheShort: share => `cache ${share}`,
+    sessionCount: count => `${count} sessions`, lastActive: date => `last ${date}`, mergedPaths: count => `${count} paths merged`,
+    rhythm: 'Rhythm', peak: (day, hour) => `Peak: ${day} ${hour}:00`, noUsage: 'No usage', less: 'Less', more: 'More',
+    rhythmNote: 'Local time, weekday × hour', rhythmLabel: 'Usage heatmap by weekday and hour. Use the arrow keys to read each cell.',
+    shareOfRange: share => `${share} of the range`, tokenCount: count => `${count} tokens`,
+    topByCost: 'Most expensive sessions', topByTokens: 'Largest sessions by tokens',
+    concentration: (count, share) => `Top 10% of sessions (${count}) hold ${share} of cost`, viewAllSessions: 'View all sessions',
+    searchSessions: 'Search name, project, or tool', sort: 'Sort', recent: 'Recent', durationLabel: 'Duration',
+    sessionCountIn: (count, range) => `${count} sessions · ${range}`,
+    session: 'Session', started: 'Started', replies: 'Replies', models: 'Models',
+    showing: (shown, total) => `Showing ${shown} of ${total}`, loadMore: 'Load more', noMatchingSessions: 'No matching sessions',
+    untitled: 'Untitled session', sessionDetails: 'Session details · whole session', tokensPerHour: 'Tokens per hour', tokensPerDay: 'Tokens per day',
+    stackedByModel: 'Stacked by model', tokenMix: 'Token mix', toolCalls: 'Tool calls', replyCount: count => `${count} replies`,
+    copy: 'Copy ID', copied: 'Copied', onlyThisProject: 'Show only this project', selectSession: 'Select a session to see its details.',
+    by: 'By', periodBy: interval => `Period (${interval.toLowerCase()})`, rowsIn: (count, range) => `${count} rows · ${range}`,
+    onlyActivePeriods: 'only periods with usage', shareOfCost: 'Share of cost', shareOfTokens: 'Share of tokens', averagePrice: 'Avg / 1M', total: 'Total',
+    sortedBy: { cost: 'sorted by cost', tokens: 'sorted by tokens' },
+    minutes: minutes => `${minutes} min`, hoursMinutes: (hours, minutes) => `${hours} h${minutes ? ` ${minutes} min` : ''}`,
+    metricNote: 'Total tokens = input + output + cached, matching the TUI; reasoning tokens are listed separately. Costs are estimated from public API prices and may differ from subscription spending.',
   },
 };
-const savedLanguage = (() => { try { return localStorage.getItem('splitrail-web-language'); } catch { return null; } })();
-let language = savedLanguage === 'zh' || savedLanguage === 'en' ? savedLanguage : (navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en');
-let number;
-let money;
-let fullDate;
-let shortDate;
-let monthDate;
-const svgNS = 'http://www.w3.org/2000/svg';
-let rows = [];
-let loaded = false;
-let statusState = { kind: 'loading' };
-const choices = { model: [], project: [], tool: [] };
-const selectedFilters = { model: new Set(), project: new Set(), tool: new Set() };
-const menuState = { key: null, values: [], active: 0 };
-let isolatedSeriesId = null;
-let chartState = null;
-let tablePage = 0;
-let seriesPage = 0;
 
-function t(key) { return messages[language][key]; }
+const elements = Object.fromEntries(['status', 'refresh', 'language', 'tabs-bar', 'tabs', 'filters', 'view']
+  .map(id => [id, document.getElementById(id)]));
+let language = initialLanguage();
+let fmt;
+let state = readHash();
+let snapshot = null;
+let loading = false;
+let loadError = null;
+let openMenu = null;
+let menuQuery = '';
+let sessionLimit = SESSION_PAGE_SIZE;
+// Color slots per dimension for the selected time range; see colorSlots.
+let slots = {};
 
-function formatDate(date, short = false) {
-  return (short ? shortDate : fullDate).format(new Date(`${date}T12:00:00`));
+function t(key) {
+  return messages[language][key];
 }
 
-function renderStatus() {
-  const status = document.getElementById('status');
-  if (statusState.kind === 'loading') status.textContent = t('loading');
-  else if (statusState.kind === 'error') status.textContent = t('loadError')(statusState.detail);
-  else status.textContent = rows.length ? t('loaded')(rows.length) : t('noData');
-}
-
-function setLanguage(next, persist = false) {
-  language = next;
-  if (menuState.key) hideMenu(menuState.key);
-  const locale = language === 'zh' ? 'zh-CN' : 'en-US';
-  number = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
-  money = new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 });
-  fullDate = new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric' });
-  shortDate = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' });
-  monthDate = new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short' });
-  document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
-  document.title = t('title');
-  document.getElementById('language').value = language;
-  document.getElementById('language').setAttribute('aria-label', t('languageLabel'));
-  for (const element of document.querySelectorAll('[data-i18n]')) element.textContent = t(element.dataset.i18n);
-  for (const element of document.querySelectorAll('[data-i18n-aria]')) element.setAttribute('aria-label', t(element.dataset.i18nAria));
-  for (const element of document.querySelectorAll('[data-i18n-placeholder]')) element.placeholder = t(element.dataset.i18nPlaceholder);
-  document.getElementById('chart-legend').setAttribute('aria-label', t('legendAria'));
-  renderLabels();
-  for (const key of ['model', 'project', 'tool']) updateChoices(key);
-  renderStatus();
-  if (loaded) render();
-  if (persist) { try { localStorage.setItem('splitrail-web-language', language); } catch { /* The page still works without storage. */ } }
-}
-
-function format(value, metric) {
-  return metric === 'cost' ? money.format(value) : number.format(value);
-}
-
-function choiceLabel(key, value) {
-  if (key === 'model' && value === 'Unknown model') return t('unknownModel');
-  if (key === 'project' && value === '') return t('unknownProject');
-  return value;
-}
-
-function renderChips(key) {
-  const container = document.getElementById(`${key}-selected`);
-  container.hidden = selectedFilters[key].size === 0;
-  container.replaceChildren();
-  for (const value of selectedFilters[key]) {
-    const label = choiceLabel(key, value);
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'selected-chip';
-    chip.title = label;
-    chip.setAttribute('aria-label', t('removeFilter')(label));
-    const name = document.createElement('span');
-    name.className = 'chip-name';
-    name.textContent = label;
-    const remove = document.createElement('span');
-    remove.setAttribute('aria-hidden', 'true');
-    remove.textContent = '×';
-    chip.append(name, remove);
-    chip.addEventListener('click', () => {
-      selectedFilters[key].delete(value);
-      renderChips(key);
-      if (menuState.key === key) showMenu(key, controls[key].value);
-      if (loaded) render();
-    });
-    container.append(chip);
+// DOM helpers. Text always goes through text nodes, never HTML parsing.
+function setProps(element, props) {
+  for (const [key, value] of Object.entries(props ?? {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key.startsWith('on')) element.addEventListener(key.slice(2), value);
+    else if (key === 'value') element.value = value;
+    else element.setAttribute(key, value === true ? '' : String(value));
   }
 }
 
-function updateChoices(key, values) {
-  const openQuery = menuState.key === key ? controls[key].value : null;
-  if (values) choices[key] = [...values].sort((a, b) => a.localeCompare(b, language === 'zh' ? 'zh-CN' : 'en-US'));
-  for (const value of selectedFilters[key]) if (!choices[key].includes(value)) selectedFilters[key].delete(value);
-  renderChips(key);
-  if (openQuery === null) controls[key].value = '';
-  else showMenu(key, openQuery);
-}
-
-function hideMenu(key) {
-  document.getElementById(`${key}-options`).hidden = true;
-  controls[key].setAttribute('aria-expanded', 'false');
-  controls[key].removeAttribute('aria-activedescendant');
-  controls[key].value = '';
-  if (menuState.key === key) menuState.key = null;
-}
-
-function setActiveOption(key, index) {
-  const menu = document.getElementById(`${key}-options`);
-  const options = [...menu.querySelectorAll('[role="option"]')];
-  if (!options.length) return;
-  menuState.active = (index + options.length) % options.length;
-  options.forEach((option, i) => option.classList.toggle('active', i === menuState.active));
-  controls[key].setAttribute('aria-activedescendant', options[menuState.active].id);
-  options[menuState.active].scrollIntoView({ block: 'nearest' });
-}
-
-function showMenu(key, query = '') {
-  if (menuState.key && menuState.key !== key) hideMenu(menuState.key);
-  const menu = document.getElementById(`${key}-options`);
-  const needle = query.toLocaleLowerCase(language === 'zh' ? 'zh-CN' : 'en-US');
-  menuState.values = query
-    ? choices[key].filter(value => choiceLabel(key, value).toLocaleLowerCase(language === 'zh' ? 'zh-CN' : 'en-US').includes(needle))
-    : [null, ...choices[key]];
-  menuState.key = key;
-  menu.replaceChildren();
-  if (!menuState.values.length) {
-    const empty = document.createElement('div');
-    empty.className = 'choice-empty';
-    empty.textContent = t('noMatches');
-    menu.append(empty);
-  }
-  menuState.values.forEach((value, index) => {
-    const option = document.createElement('div');
-    option.id = `${key}-option-${index}`;
-    option.className = 'choice-option';
-    option.setAttribute('role', 'option');
-    option.setAttribute('aria-selected', String(value !== null && selectedFilters[key].has(value)));
-    option.textContent = value === null ? t('clearAll') : choiceLabel(key, value);
-    option.addEventListener('pointerdown', event => { event.preventDefault(); toggleChoice(key, value); });
-    option.addEventListener('click', event => { if (event.detail === 0) toggleChoice(key, value); });
-    menu.append(option);
-  });
-  menu.hidden = false;
-  controls[key].setAttribute('aria-expanded', 'true');
-  setActiveOption(key, 0);
-}
-
-function toggleChoice(key, value) {
-  if (value === null) selectedFilters[key].clear();
-  else if (selectedFilters[key].has(value)) selectedFilters[key].delete(value);
-  else selectedFilters[key].add(value);
-  renderChips(key);
-  showMenu(key, controls[key].value);
-  if (loaded) render();
-}
-
-function handleChoiceInput(key) {
-  showMenu(key, controls[key].value);
-}
-
-function refreshChoices() {
-  const first = rangeStart(controls.range.value);
-  const last = localDateKey(new Date());
-  const available = rows.filter(row =>
-    (!first || row.date >= first) && row.date <= last && metricValue(row, controls.metric.value) > 0);
-  for (const key of ['model', 'project', 'tool']) updateChoices(key, new Set(available.map(row => row[key])));
-}
-
-function periodLabel(key, granularity, short = false) {
-  if (granularity === 'hour') {
-    const [date, hour] = key.split('T');
-    return `${formatDate(date, short)} ${hour}:00`;
-  }
-  if (granularity === 'day') return formatDate(key, short);
-  if (granularity === 'week') {
-    if (short) return formatDate(key, true);
-    const sunday = new Date(`${key}T12:00:00`);
-    sunday.setDate(sunday.getDate() + 6);
-    return `${formatDate(key)} – ${formatDate(localDateKey(sunday))}`;
-  }
-  if (granularity === 'month') return monthDate.format(new Date(`${key}-01T12:00:00`));
-  return key;
-}
-
-function svgElement(name, attrs = {}, content) {
-  const element = document.createElementNS(svgNS, name);
-  for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, String(value));
-  if (content !== undefined) element.textContent = content;
+function h(tag, props, ...children) {
+  const element = document.createElement(tag);
+  setProps(element, props);
+  element.append(...children.flat(Infinity).filter(child => child !== null && child !== undefined && child !== false));
   return element;
 }
 
-function renderLabels() {
-  const unit = t(controls.granularity.value);
-  const metric = controls.metric.value;
-  const title = t('trend')(unit, t(metric));
-  document.getElementById('chart-title').textContent = title;
-  document.getElementById('chart').setAttribute('aria-label', title);
-  document.getElementById('details-title').textContent = t('details')(unit);
-  document.getElementById('table-metric').textContent = t(metric);
-  document.getElementById('period-heading').textContent = t('periodHeading');
-  document.getElementById('average-label').textContent = t('averageLabel')(unit);
-  document.getElementById('peak-label').textContent = t('peakLabel')(unit);
-  document.getElementById('active-label').textContent = t('activeLabel');
-  document.getElementById('average-unit').textContent = t('perUnit')(unit, metric === 'cost');
+function svg(tag, props, ...children) {
+  const element = document.createElementNS(SVG_NS, tag);
+  setProps(element, props);
+  element.append(...children.flat(Infinity).filter(Boolean));
+  return element;
 }
 
-function groupedSeries(periods, selectedRows, metric, granularity) {
-  const dimensions = ['project', 'model', 'tool'].filter(key => selectedFilters[key].size);
-  const { groups, combinationCount, bounds } = usageSeries(periods, selectedRows, metric, granularity, dimensions, seriesPage);
-  seriesPage = bounds.page;
-  const pager = document.getElementById('series-pagination');
-  pager.hidden = combinationCount === 0;
-  document.getElementById('series-page').textContent = t('seriesPages')(bounds.start + 1, bounds.end, combinationCount);
-  document.getElementById('series-previous').disabled = seriesPage === 0;
-  document.getElementById('series-next').disabled = seriesPage + 1 === bounds.count;
-  const combinations = groups.map(group => ({
-    ...group,
-    label: group.dimensions.map(([key, item]) => `${t(key)}: ${choiceLabel(key, item)}`).join(' · '),
-    displayLabel: group.dimensions.map(([key, item]) => {
-      const label = choiceLabel(key, item);
-      const shortPath = key === 'project' && item ? item.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : '';
-      return `${t(key)}: ${shortPath || label}`;
-    }).join(' · '),
-  }));
-  const palette = ['#d05a51', '#238a80', '#ce8b22', '#8a62bd', '#3778bd', '#a9558c', '#73933d', '#bd6b42'];
-  combinations.forEach((series, index) => { series.color = palette[index % palette.length]; });
-  return [{ id: 'total', label: t('seriesTotal'), displayLabel: t('seriesTotal'), color: '#514bc6', values: periods.map(period => metricValue(period, metric)) }, ...combinations];
+function icon(paths, size = 12) {
+  return svg('svg', { class: 'icon', viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': 'true' }, paths.map(d => svg('path', { d })));
 }
 
-function isolateSeries(id) {
-  isolatedSeriesId = isolatedSeriesId === id ? null : id;
-  if (chartState) renderChart(chartState.periods, chartState.series, chartState.metric, chartState.granularity, true);
+const closeIcon = () => icon(['M5 5l6 6M11 5l-6 6']);
+const chevronIcon = () => icon(['M4.5 6.5 8 10l3.5-3.5']);
+
+function initialLanguage() {
+  try {
+    const saved = localStorage.getItem(LANGUAGE_KEY);
+    if (saved === 'zh' || saved === 'en') return saved;
+  } catch { /* Storage may be unavailable; fall back to the browser language. */ }
+  return navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }
 
-function renderChart(periods, series, metric, granularity, preserveScroll = false) {
-  const container = document.getElementById('chart');
-  const legend = document.getElementById('chart-legend');
-  const previousScroll = container.scrollLeft;
-  container.replaceChildren();
-  legend.replaceChildren();
-  if (!periods.length) {
-    const empty = document.createElement('p');
-    empty.className = 'empty';
-    empty.textContent = t('empty');
-    container.append(empty);
-    return;
+function setLanguage(next, persist) {
+  language = next;
+  const locale = language === 'zh' ? 'zh-CN' : 'en-US';
+  const integer = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
+  const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const monthDay = new Intl.DateTimeFormat(locale, { month: 'numeric', day: 'numeric' });
+  const dayLong = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', weekday: 'short' });
+  const monthLong = new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short' });
+  const clock = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const weekday = new Intl.DateTimeFormat(locale, { weekday: 'short' });
+  fmt = {
+    int: value => integer.format(value),
+    cost: value => money.format(value),
+    compact,
+    percent: (value, digits = 1) => `${(value * 100).toFixed(digits)}%`,
+    md: key => monthDay.format(noon(key)),
+    day: key => dayLong.format(noon(key)),
+    month: key => monthLong.format(noon(`${key}-01`)),
+    clock: date => clock.format(date),
+    duration: minutes => (minutes < 60 ? t('minutes')(minutes) : t('hoursMinutes')(Math.floor(minutes / 60), minutes % 60)),
+    // 2024-01-01 was a Monday.
+    weekdays: Array.from({ length: 7 }, (_, index) => weekday.format(new Date(2024, 0, 1 + index))),
+  };
+  document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
+  elements.language.value = language;
+  elements.language.setAttribute('aria-label', t('language'));
+  elements['tabs-bar'].setAttribute('aria-label', t('views'));
+  for (const element of document.querySelectorAll('[data-i18n]')) element.textContent = t(element.dataset.i18n);
+  if (persist) {
+    try { localStorage.setItem(LANGUAGE_KEY, language); } catch { /* The page works without storage. */ }
   }
-  const width = Math.max(760, container.clientWidth);
-  const height = 280;
-  const left = 110, right = 24, top = 24, bottom = 42;
-  const plotWidth = width - left - right, plotHeight = height - top - bottom;
-  const visible = series.filter(item => !isolatedSeriesId || item.id === isolatedSeriesId);
-  const max = visible.reduce((largest, item) => item.values.reduce((peak, value) => Math.max(peak, value), largest), 1);
-  const svg = svgElement('svg', { viewBox: `0 0 ${width} ${height}`, width, height, 'aria-hidden': 'true' });
-  for (let i = 0; i <= 4; i++) {
-    const y = top + plotHeight * i / 4;
-    svg.append(svgElement('line', { x1: left, y1: y, x2: width - right, y2: y, class: 'grid-line' }));
-    svg.append(svgElement('text', { x: left - 10, y: y + 4, 'text-anchor': 'end', class: 'axis-label' }, format(max * (4 - i) / 4, metric)));
-  }
-  const labelEvery = Math.max(1, Math.ceil(periods.length / Math.floor(plotWidth / 85)));
-  periods.forEach((period, i) => {
-    const x = left + (i + 0.5) * plotWidth / periods.length;
-    if (i % labelEvery === 0 || (i === periods.length - 1 && i % labelEvery >= Math.ceil(labelEvery / 2))) svg.append(svgElement('text', { x, y: height - 13, 'text-anchor': 'middle', class: 'axis-label' }, periodLabel(period.key, granularity, true)));
-  });
-  for (const item of series) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'legend-item';
-    button.classList.toggle('dimmed', !!isolatedSeriesId && isolatedSeriesId !== item.id);
-    button.style.setProperty('--line-color', item.color);
-    button.setAttribute('aria-pressed', String(isolatedSeriesId === item.id));
-    button.title = item.label;
-    const swatch = document.createElement('span');
-    swatch.className = 'legend-swatch';
-    swatch.setAttribute('aria-hidden', 'true');
-    const label = document.createElement('span');
-    label.className = 'legend-label';
-    label.textContent = item.displayLabel;
-    button.append(swatch, label);
-    button.addEventListener('click', () => isolateSeries(item.id));
-    legend.append(button);
-    if (isolatedSeriesId && isolatedSeriesId !== item.id) continue;
-    const points = chartSamples(item.values).map(({ value, index }) => ({
-      index,
-      x: left + (index + 0.5) * plotWidth / periods.length,
-      y: top + plotHeight - value / max * plotHeight,
-    }));
-    const path = points.map((point, index) => `${index ? 'L' : 'M'}${point.x},${point.y}`).join(' ');
-    svg.append(svgElement('path', { d: path, stroke: item.color, 'stroke-width': item.id === 'total' ? 3 : 2.5, class: 'series-line' }));
-    const hit = svgElement('path', { d: path, class: 'series-hit' });
-    hit.append(svgElement('title', {}, item.label));
-    hit.addEventListener('click', () => isolateSeries(item.id));
-    svg.append(hit);
-    if (periods.length <= 90) points.forEach(point => {
-      const circle = svgElement('circle', { cx: point.x, cy: point.y, r: 3.5, fill: item.color, class: 'series-point' });
-      circle.append(svgElement('title', {}, `${item.label} · ${periodLabel(periods[point.index].key, granularity)} · ${format(item.values[point.index], metric)}`));
-      circle.addEventListener('click', () => isolateSeries(item.id));
-      svg.append(circle);
-    });
-  }
-  container.append(svg);
-  container.scrollLeft = preserveScroll ? previousScroll : container.scrollWidth;
+  render();
 }
 
-function renderTable(periods, series, metric, granularity) {
-  const body = document.getElementById('table-body');
-  body.replaceChildren();
-  const { indexes, total, bounds } = detailPage(periods, metric, tablePage);
-  document.getElementById('row-count').textContent = t('periodCount')(total);
-  document.querySelectorAll('th.series-column').forEach(header => header.remove());
-  const combinations = series.slice(1);
-  tablePage = bounds.page;
-  document.getElementById('table-pagination').hidden = total === 0;
-  document.getElementById('table-page').textContent = t('tablePages')(tablePage + 1, bounds.count);
-  document.getElementById('table-previous').disabled = tablePage === 0;
-  document.getElementById('table-next').disabled = tablePage + 1 === bounds.count;
-  let previous = document.getElementById('table-metric');
-  for (const item of combinations) {
-    const header = document.createElement('th');
-    header.className = 'series-column';
-    header.textContent = item.displayLabel;
-    header.title = item.label;
-    previous.after(header);
-    previous = header;
-  }
-  for (const index of indexes) {
-    const period = periods[index];
-    const tr = document.createElement('tr');
-    const values = [periodLabel(period.key, granularity), format(metricValue(period, metric), metric),
-      ...combinations.map(item => format(item.values[index], metric)),
-      format(period.inputTokens, 'inputTokens'), format(period.outputTokens, 'outputTokens'), format(period.cachedTokens, 'cachedTokens'), format(period.reasoningTokens, 'reasoningTokens'), format(period.cost, 'cost')];
-    for (const value of values) {
-      const cell = document.createElement('td');
-      cell.textContent = value;
-      tr.append(cell);
-    }
-    body.append(tr);
-  }
-  document.querySelector('.table-scroll').scrollTop = 0;
+function noon(key) {
+  return new Date(`${key}T12:00:00`);
 }
 
-function render(resetPages = true) {
-  if (resetPages) { tablePage = 0; seriesPage = 0; }
-  const metric = controls.metric.value;
-  const granularity = controls.granularity.value;
-  const { periods, selectedRows } = selectPeriods(rows, selectedFilters, granularity, controls.range.value);
-  const series = groupedSeries(periods, selectedRows, metric, granularity);
-  if (isolatedSeriesId && !series.some(item => item.id === isolatedSeriesId)) isolatedSeriesId = null;
-  const values = periods.map(period => metricValue(period, metric));
-  const sum = values.reduce((a, b) => a + b, 0);
-  const peak = values.reduce((largest, value) => Math.max(largest, value), 0);
-  const peakIndex = values.indexOf(peak);
-  renderLabels();
-  document.getElementById('sum').textContent = format(sum, metric);
-  document.getElementById('average').textContent = format(periods.length ? sum / periods.length : 0, metric);
-  document.getElementById('peak').textContent = format(peak, metric);
-  document.getElementById('peak-date').textContent = peak > 0 ? periodLabel(periods[peakIndex].key, granularity) : '—';
-  document.getElementById('active-days').textContent = String(periods.filter(period => period.inputTokens + period.outputTokens + period.cachedTokens + period.reasoningTokens > 0).length);
-  document.getElementById('period-days').textContent = t('periodCount')(periods.length);
-  document.getElementById('sum-unit').textContent = metric === 'cost' ? 'USD' : 'tokens';
-  chartState = { periods, series, metric, granularity };
-  renderChart(periods, series, metric, granularity);
-  renderTable(periods, series, metric, granularity);
+function compact(value) {
+  const trim = (number, digits) => String(Number(number.toFixed(digits)));
+  if (value >= 1e9) return `${trim(value / 1e9, 2)}B`;
+  if (value >= 1e6) return `${trim(value / 1e6, 1)}M`;
+  if (value >= 1e3) return `${trim(value / 1e3, 1)}K`;
+  return trim(value, value < 10 ? 2 : 0);
 }
 
-async function load(refreshData = false) {
-  const refresh = document.getElementById('refresh');
-  refresh.disabled = true;
-  statusState = { kind: 'loading' };
+// The URL hash holds the view state, so reloads and bookmarks restore it.
+function defaultState() {
+  return {
+    view: 'overview', range: '30', day: null, metric: 'cost', group: 'model', granularity: null,
+    sort: 'recent', q: '', session: null, dim: 'project',
+    filters: { tool: new Set(), model: new Set(), project: new Set() },
+  };
+}
+
+function readHash() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const next = defaultState();
+  const choose = (key, allowed) => {
+    if (allowed.includes(params.get(key))) next[key] = params.get(key);
+  };
+  choose('view', VIEWS);
+  choose('range', RANGES);
+  choose('metric', METRICS);
+  choose('group', DIMENSIONS);
+  choose('granularity', GRANULARITIES);
+  choose('sort', SORTS);
+  choose('dim', BREAKDOWNS);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(params.get('day') ?? '')) next.day = params.get('day');
+  next.q = params.get('q') ?? '';
+  next.session = params.get('session');
+  for (const key of DIMENSIONS) next.filters[key] = new Set(params.getAll(key));
+  return next;
+}
+
+function writeHash() {
+  const params = new URLSearchParams();
+  const defaults = defaultState();
+  for (const key of ['view', 'range', 'day', 'metric', 'group', 'granularity', 'sort', 'q', 'session', 'dim']) {
+    if (state[key] && state[key] !== defaults[key]) params.set(key, state[key]);
+  }
+  for (const key of DIMENSIONS) for (const value of state.filters[key]) params.append(key, value);
+  const hash = params.toString();
+  if (hash !== location.hash.slice(1)) history.replaceState(null, '', hash ? `#${hash}` : `${location.pathname}${location.search}`);
+}
+
+function update(patch) {
+  if (Object.keys(patch).some(key => key !== 'session')) sessionLimit = SESSION_PAGE_SIZE;
+  Object.assign(state, patch);
+  writeHash();
+  render();
+}
+
+function toggleFilter(key, value) {
+  const next = new Set(state.filters[key]);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  update({ filters: { ...state.filters, [key]: next }, session: null });
+}
+
+async function load(refresh = false) {
+  loading = true;
+  loadError = null;
+  elements.refresh.disabled = true;
   renderStatus();
   try {
-    const response = await fetch(`/api/usage${refreshData ? '?refresh=true' : ''}`, { cache: 'no-store' });
+    const response = await fetch(`/api/usage${refresh ? '?refresh=true' : ''}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    rows = await response.json();
-    refreshChoices();
-    loaded = true;
-    statusState = { kind: 'loaded' };
-    renderStatus();
-    render();
+    snapshot = prepare(await response.json());
   } catch (error) {
-    statusState = { kind: 'error', detail: error.message };
-    renderStatus();
+    loadError = error.message;
   } finally {
-    refresh.disabled = false;
+    loading = false;
+    elements.refresh.disabled = false;
+    render();
   }
 }
 
-for (const key of ['model', 'project', 'tool']) {
-  controls[key].addEventListener('focus', () => showMenu(key, controls[key].value));
-  controls[key].addEventListener('input', () => handleChoiceInput(key));
-  controls[key].addEventListener('keydown', event => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+function prepare(data) {
+  const projects = new Map(data.projects.map(project => [project.id, project.paths]));
+  return {
+    rows: data.rows,
+    sessions: new Map(data.sessions.map(session => [session.id, { ...session, start: new Date(session.start), end: new Date(session.end) }])),
+    projects,
+    labels: projectLabels([...projects.keys()], projects),
+    tools: new Set(data.rows.map(row => row.tool)).size,
+    firstDate: data.rows.reduce((first, row) => (!first || row.date < first ? row.date : first), ''),
+    scannedAt: new Date(data.scannedAt),
+  };
+}
+
+// The last two path segments name a project unless another project shares
+// them; then more of the path is shown.
+function projectLabels(ids, projects) {
+  const labels = new Map();
+  const segments = id => id.split(/[\\/]/).filter(Boolean);
+  for (const depth of [2, 3, Infinity]) {
+    const pending = ids.filter(id => projects.has(id) && !labels.has(id));
+    const name = id => (depth === Infinity ? id : segments(id).slice(-depth).join('/') || id);
+    const counts = new Map();
+    for (const id of pending) counts.set(name(id), (counts.get(name(id)) ?? 0) + 1);
+    for (const id of pending) if (depth === Infinity || counts.get(name(id)) === 1) labels.set(id, name(id));
+  }
+  return labels;
+}
+
+function label(key, value) {
+  if (value === OTHER) return t('other');
+  if (key === 'model' && value === 'Unknown model') return t('unknownModel');
+  if (key !== 'project') return value;
+  return snapshot.labels.get(value) ?? (value ? `${t('unknownProject')} · ${value.slice(0, 6)}` : t('unknownProject'));
+}
+
+function projectTitle(value) {
+  const paths = snapshot.projects.get(value);
+  return paths ? [value, ...paths.filter(path => path !== value)].join('\n') : label('project', value);
+}
+
+function seriesColor(dimension, value) {
+  const slot = slots[dimension].get(value);
+  return slot === undefined ? 'var(--other)' : `var(--series-${slot})`;
+}
+
+function sessionName(meta) {
+  return meta.name?.trim() || t('untitled');
+}
+
+function sessionMinutes(meta) {
+  return Math.max(1, Math.round((meta.end - meta.start) / 60000));
+}
+
+const amount = totals => (state.metric === 'cost' ? totals.cost : totalTokens(totals));
+const formatAmount = value => (state.metric === 'cost' ? fmt.cost(value) : fmt.compact(value));
+const formatAxis = value => (state.metric === 'cost' ? `$${fmt.compact(value)}` : fmt.compact(value));
+
+function compute() {
+  const now = new Date();
+  const range = selectRange(state.range, state.day, now, snapshot.firstDate);
+  const granularities = granularityOptions(range.days);
+  const granularity = granularities.includes(state.granularity) ? state.granularity : granularities[0];
+  const scoped = snapshot.rows.filter(row => inRange(row, range));
+  const rows = scoped.filter(row => matchesFilters(row, state.filters));
+  const prev = range.prev
+    ? sumRows(snapshot.rows.filter(row => inRange(row, range.prev) && matchesFilters(row, state.filters)))
+    : null;
+  return { now, range, granularity, granularities, keys: bucketKeys(range, granularity, now), scoped, rows, totals: sumRows(rows), prev };
+}
+
+function rangeLabel(range) {
+  if (state.day) return fmt.day(state.day);
+  if (state.range === 'today') return t('today');
+  if (state.range === 'all') return t('allDays')(fmt.int(range.days));
+  return t('lastDays')(range.days);
+}
+
+function comparisonLabel() {
+  if (state.day) return t('vsPreviousDay');
+  if (state.range === 'today') return t('vsYesterday');
+  return t('vsPrevious')(state.range);
+}
+
+function delta(current, previous, comparison) {
+  if (previous === null || previous === undefined) return t('noComparison');
+  if (previous === 0) return `${current > 0 ? t('previousZero') : t('unchanged')} · ${comparison}`;
+  const change = (current - previous) / previous;
+  return `${change >= 0 ? '▲' : '▼'} ${fmt.percent(Math.abs(change))} · ${comparison}`;
+}
+
+function points(current, previous, comparison) {
+  const change = (current - previous) * 100;
+  return `${change >= 0 ? '▲' : '▼'} ${Math.abs(change).toFixed(1)} ${t('points')} · ${comparison}`;
+}
+
+function periodLabel(key, granularity, short, range) {
+  if (granularity === 'hour') {
+    const [date, hour] = key.split('T');
+    if (short) return range.days === 1 ? `${hour}:00` : hour === '00' ? fmt.md(date) : `${fmt.md(date)} ${hour}:00`;
+    return `${fmt.day(date)} ${hour}:00–${String(Number(hour) + 1).padStart(2, '0')}:00`;
+  }
+  if (granularity === 'day') return short ? fmt.md(key) : fmt.day(key);
+  if (granularity === 'week') return short ? fmt.md(key) : `${fmt.md(key)} – ${fmt.md(shiftDate(key, 6))}`;
+  return fmt.month(key);
+}
+
+function segmented(name, items, onPick) {
+  return h('div', { class: 'seg', role: 'group', 'aria-label': name },
+    items.map(item => h('button', {
+      type: 'button', 'aria-pressed': String(item.pressed), 'data-focus': `${name}:${item.value}`,
+      onclick: () => onPick(item.value),
+    }, item.label)));
+}
+
+function sectionHead(number, title, sub, ...actions) {
+  return h('div', { class: 'section-head' },
+    h('div', { class: 'section-title' },
+      number ? h('span', { class: 'section-no' }, number) : null,
+      h('h2', {}, title),
+      sub ? h('span', { class: 'small muted' }, sub) : null),
+    h('div', { class: 'section-actions' }, actions));
+}
+
+function swatch(color) {
+  return h('span', { class: 'swatch', style: `background:${color}` });
+}
+
+function render() {
+  const active = document.activeElement;
+  const focus = active?.dataset?.focus;
+  const selection = focus && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
+  document.title = t('title');
+  renderStatus();
+  if (!snapshot) {
+    elements.tabs.replaceChildren();
+    elements.filters.replaceChildren();
+    elements.view.replaceChildren(h('p', { class: 'empty' }, loadError ? t('loadError')(loadError) : t('loading')));
+    return;
+  }
+  const view = compute();
+  slots = Object.fromEntries(DIMENSIONS.map(key => [key, colorSlots(view.scoped, key)]));
+  renderTabs(view);
+  renderFilters(view);
+  const content = !snapshot.rows.length
+    ? [h('p', { class: 'empty' }, t('noData'))]
+    : state.view === 'sessions' ? sessionsView(view) : state.view === 'breakdown' ? breakdownView(view) : overview(view);
+  elements.view.replaceChildren(...content.filter(Boolean));
+  if (!focus) return;
+  const target = document.querySelector(`[data-focus="${CSS.escape(focus)}"]`);
+  target?.focus({ preventScroll: true });
+  if (selection && target?.setSelectionRange) target.setSelectionRange(...selection);
+}
+
+function renderStatus() {
+  if (loading) elements.status.textContent = snapshot ? t('scanning') : t('loading');
+  else if (loadError) elements.status.textContent = t('loadError')(loadError);
+  else if (snapshot) elements.status.textContent = t('scanned')(fmt.clock(snapshot.scannedAt), fmt.int(snapshot.tools), fmt.int(snapshot.sessions.size));
+  else elements.status.textContent = '';
+}
+
+function renderTabs(view) {
+  elements.tabs.replaceChildren(...VIEWS.map(id => h('button', {
+    type: 'button', class: 'tab', 'aria-pressed': String(state.view === id), 'data-focus': `tab:${id}`,
+    onclick: () => update({ view: id }),
+  }, t(id), id === 'sessions' ? h('span', { class: 'tab-badge num' }, fmt.int(view.totals.sessions.size)) : null)));
+}
+
+function renderFilters(view) {
+  const chips = DIMENSIONS.flatMap(key => [...state.filters[key]].map(value => h('button', {
+    type: 'button', class: 'chip', 'aria-label': t('removeFilter')(label(key, value)), 'data-focus': `chip:${key}:${value}`,
+    title: key === 'project' ? projectTitle(value) : null, onclick: () => toggleFilter(key, value),
+  }, h('span', {}, `${t(key)}: ${label(key, value)}`), closeIcon())));
+  elements.filters.replaceChildren(...[
+    segmented(t('range'), RANGES.map(range => ({ value: range, label: t(RANGE_LABELS[range]), pressed: !state.day && state.range === range })),
+      range => update({ range, day: null, session: null })),
+    state.day ? h('button', { type: 'button', class: 'chip', 'aria-label': t('clearDrill'), 'data-focus': 'drill', onclick: () => update({ day: null }) },
+      h('span', {}, `${fmt.day(state.day)} · ${t('hourly')}`), closeIcon()) : null,
+    h('span', { class: 'divider hide-sm', 'aria-hidden': 'true' }),
+    ...DIMENSIONS.map(key => filterMenu(key, view)),
+    ...chips,
+    chips.length || state.day
+      ? h('button', { type: 'button', class: 'link', 'data-focus': 'clear', onclick: () => update({ filters: defaultState().filters, day: null, session: null }) }, t('clearFilters'))
+      : null,
+    h('div', { class: 'metric-group' },
+      h('span', { class: 'small muted' }, t('metric')),
+      segmented(t('metric'), METRICS.map(metric => ({ value: metric, label: t(metric), pressed: state.metric === metric })), metric => update({ metric }))),
+  ].filter(Boolean));
+}
+
+function filterMenu(key, view) {
+  const open = openMenu === key;
+  const selected = state.filters[key];
+  const wrap = h('div', { class: 'menu-wrap', onclick: event => event.stopPropagation() },
+    h('button', {
+      type: 'button', class: 'btn', 'aria-haspopup': 'true', 'aria-expanded': String(open), 'data-focus': `menu:${key}`,
+      onclick: () => {
+        openMenu = open ? null : key;
+        menuQuery = '';
+        render();
+        if (!open) document.querySelector(`[data-focus="menu-search:${key}"]`)?.focus();
+      },
+    }, t(key), selected.size ? h('span', { class: 'count' }, String(selected.size)) : null, chevronIcon()));
+  if (!open) return wrap;
+  const totals = groupRows(view.scoped, row => row[key]);
+  for (const value of selected) if (!totals.has(value)) totals.set(value, sumRows([]));
+  const query = menuQuery.trim().toLocaleLowerCase();
+  const options = [...totals]
+    .filter(([value]) => !query || `${label(key, value)} ${value}`.toLocaleLowerCase().includes(query))
+    .sort((a, b) => amount(b[1]) - amount(a[1]));
+  wrap.append(h('div', { class: 'menu', role: 'group', 'aria-label': t(key) },
+    h('input', {
+      type: 'search', class: 'menu-search', value: menuQuery, placeholder: t('searchIn')(t(key)), 'aria-label': t('searchIn')(t(key)),
+      'data-focus': `menu-search:${key}`, oninput: event => { menuQuery = event.target.value; render(); },
+    }),
+    options.length
+      ? h('div', { class: 'menu-list' }, options.map(([value, item]) => h('button', {
+        type: 'button', class: 'menu-item', 'aria-pressed': String(selected.has(value)), 'data-focus': `option:${key}:${value}`,
+        title: key === 'project' ? projectTitle(value) : null, onclick: () => toggleFilter(key, value),
+      }, h('span', { class: 'check', 'aria-hidden': 'true' }, selected.has(value) ? '✓' : ''),
+      h('span', { class: 'ellipsis grow' }, label(key, value)),
+      h('span', { class: 'num small muted' }, amount(item) ? formatAmount(amount(item)) : '—'))))
+      : h('p', { class: 'menu-empty' }, t('noMatches')),
+    selected.size
+      ? h('button', { type: 'button', class: 'link menu-clear', onclick: () => update({ filters: { ...state.filters, [key]: new Set() } }) }, t('clearSelection'))
+      : null));
+  return wrap;
+}
+
+function overview(view) {
+  return [
+    kpiSection(view),
+    qualityNote(view),
+    trendSection(view),
+    h('section', { class: 'three', 'aria-label': t('rankings') },
+      [['model', '02'], ['tool', '03'], ['project', '04']].map(([key, number]) => rankCard(view, key, number))),
+    h('section', { class: 'two' }, heatSection(view), topSessionsSection(view)),
+    h('p', { class: 'note' }, t('metricNote')),
+  ];
+}
+
+function sparkline(values) {
+  const max = Math.max(0, ...values);
+  const coordinates = values.length > 1 && max > 0
+    ? values.map((value, index) => `${((index / (values.length - 1)) * 200).toFixed(1)},${(46 - (value / max) * 40).toFixed(1)}`)
+    : ['0,46', '200,46'];
+  const line = `M${coordinates.join(' L')}`;
+  return svg('svg', { class: 'spark', viewBox: '0 0 200 48', preserveAspectRatio: 'none', 'aria-hidden': 'true' },
+    svg('path', { class: 'spark-area', d: `${line} L200,48 L0,48 Z` }),
+    svg('path', { class: 'spark-line', d: line }));
+}
+
+// Token mix stays grayscale (cached, input, output) so hue always names an entity.
+function composition(totals, className) {
+  const parts = [totals.cachedTokens, totals.inputTokens, totals.outputTokens];
+  const sum = parts.reduce((total, value) => total + value, 0);
+  return h('span', { class: className, 'aria-hidden': 'true' },
+    parts.map((value, index) => h('span', { style: `flex:${sum ? value / sum : 1} 1 0;background:var(--comp-${index})` })));
+}
+
+function compositionLegend(totals) {
+  const parts = [['cached', totals.cachedTokens], ['input', totals.inputTokens], ['output', totals.outputTokens]];
+  const sum = parts.reduce((total, [, value]) => total + value, 0);
+  return h('div', { class: 'legend' }, parts.map(([key, value], index) => h('span', { class: 'legend-item' },
+    swatch(`var(--comp-${index})`), t(key), ' ',
+    h('span', { class: 'num' }, sum ? fmt.percent(value / sum, value / sum < 0.01 ? 2 : 1) : '0%'))));
+}
+
+function kpiSection(view) {
+  const { totals, prev, range, keys } = view;
+  const comparison = comparisonLabel();
+  const index = new Map(keys.map((key, position) => [key, position]));
+  const costs = new Array(keys.length).fill(0);
+  for (const row of view.rows) {
+    const position = index.get(periodKey(row.date, row.hour, view.granularity));
+    if (position !== undefined) costs[position] += row.cost;
+  }
+  const durations = [...totals.sessions].map(id => snapshot.sessions.get(id)).filter(Boolean).map(sessionMinutes);
+  const average = range.days === 1
+    ? (state.day ? t('wholeDay') : t('asOf')(fmt.clock(view.now)))
+    : t('dailyAverage')(fmt.cost(totals.cost / range.days), fmt.int(totals.dates.size), fmt.int(range.days));
+  const card = (title, value, change, ...notes) => h('div', { class: 'card kpi' },
+    h('h2', { class: 'kpi-label' }, title), h('p', { class: 'kpi-value' }, value), h('p', { class: 'delta' }, change), notes);
+  return h('section', { class: 'kpis', 'aria-label': t('summary') },
+    h('div', { class: 'card kpi hero' },
+      h('div', { class: 'kpi-head' }, h('h2', { class: 'kpi-label' }, t('estimatedCost')), h('span', { class: 'small muted' }, rangeLabel(range))),
+      h('div', { class: 'hero-body' },
+        h('div', {}, h('p', { class: 'hero-value' }, fmt.cost(totals.cost)), h('p', { class: 'delta' }, delta(totals.cost, prev?.cost, comparison))),
+        sparkline(costs)),
+      h('p', { class: 'small muted' }, average)),
+    card(t('totalTokens'), fmt.compact(totalTokens(totals)), delta(totalTokens(totals), prev && totalTokens(prev), comparison),
+      composition(totals, 'comp'), compositionLegend(totals)),
+    card(t('sessions'), fmt.int(totals.sessions.size), delta(totals.sessions.size, prev?.sessions.size, comparison),
+      h('p', { class: 'small muted' }, durations.length ? t('sessionsSub')(fmt.duration(median(durations)), fmt.int(totals.messages)) : t('noSessions'))),
+    card(t('cacheShare'), fmt.percent(cacheShare(totals)), prev ? points(cacheShare(totals), cacheShare(prev), comparison) : t('noComparison'),
+      h('p', { class: 'small muted' }, t('cacheSub'))));
+}
+
+function qualityNote(view) {
+  const unpriced = [...groupRows(view.rows, row => row.model)].filter(([, totals]) => totals.cost === 0 && totalTokens(totals) > 0);
+  if (!unpriced.length) return null;
+  const tokens = unpriced.reduce((sum, [, totals]) => sum + totalTokens(totals), 0);
+  const names = unpriced.map(([model]) => label('model', model)).join(t('listSeparator'));
+  return h('div', { class: 'quality', role: 'note' },
+    svg('svg', { viewBox: '0 0 16 16', width: 16, height: 16, 'aria-hidden': 'true' },
+      svg('path', { d: 'M8 1.5 15 14H1z', style: 'fill:var(--warn)' }),
+      svg('path', { d: 'M8 6v4', style: 'stroke:#1b1a18;stroke-width:1.6;stroke-linecap:round' }),
+      svg('circle', { cx: 8, cy: 12, r: 0.9, style: 'fill:#1b1a18' })),
+    h('p', {}, h('strong', {}, t('costMayBeLow')), ` · ${t('unpriced')(names, fmt.compact(tokens))}`),
+    h('button', { type: 'button', class: 'link', onclick: () => update({ view: 'breakdown', dim: 'model' }) }, t('viewInBreakdown')));
+}
+
+function granularityControl(view) {
+  if (view.granularities.length < 2) return null;
+  return [
+    h('span', { class: 'small muted' }, t('interval')),
+    segmented(t('interval'), GRANULARITIES.filter(item => view.granularities.includes(item))
+      .map(item => ({ value: item, label: t('intervals')[item], pressed: item === view.granularity })), granularity => update({ granularity })),
+  ];
+}
+
+function stackBar(series, index, total, height, dimension) {
+  const parts = series.filter(item => item.values[index] > 0);
+  const gap = parts.length > 1 && height >= parts.length * 6 ? 2 : 0;
+  const available = Math.max(0, height - gap * (parts.length - 1));
+  const radius = height >= 4 ? 4 : 1;
+  return h('div', { class: 'bar', 'data-index': index },
+    h('div', { class: 'stack', style: `height:${height}px;gap:${gap}px` },
+      parts.map((item, position) => h('div', {
+        class: 'segment',
+        style: `height:${(item.values[index] / total) * available}px;background:${seriesColor(dimension, item.id)}${position === parts.length - 1 ? `;border-radius:${radius}px ${radius}px 0 0` : ''}`,
+      }))));
+}
+
+function trendSection(view) {
+  const series = stackedSeries(view.rows, view.keys, view.granularity, state.group, state.metric, slots[state.group]);
+  const title = t('trendTitle')(t('every')[view.granularity], state.metric);
+  return h('section', { class: 'card trend' },
+    sectionHead('01', title, t('stackedBy')(t(state.group), rangeLabel(view.range)),
+      h('span', { class: 'small muted' }, t('group')),
+      segmented(t('group'), ['model', 'tool', 'project'].map(key => ({ value: key, label: t(key), pressed: state.group === key })), group => update({ group })),
+      granularityControl(view),
+      h('button', { type: 'button', class: 'link', onclick: () => update({ view: 'breakdown', dim: 'period' }) }, t('viewTable'))),
+    h('div', { class: 'legend' }, series.map(item => h('span', { class: 'legend-item' }, swatch(seriesColor(state.group, item.id)), label(state.group, item.id)))),
+    trendChart(series, view, title),
+    view.granularity === 'day' ? h('p', { class: 'hint' }, t('drillHint')) : null);
+}
+
+function trendChart(series, view, title) {
+  const { keys, granularity, range } = view;
+  const totals = keys.map((_, index) => series.reduce((sum, item) => sum + item.values[index], 0));
+  const max = Math.max(0, ...totals);
+  const step = niceStep(max);
+  const drillable = granularity === 'day';
+  const bars = h('div', { class: drillable ? 'bars drillable' : 'bars' },
+    keys.map((_, index) => stackBar(series, index, totals[index], (totals[index] / (step * 4)) * PLOT_HEIGHT, state.group)));
+  const tip = h('div', { class: 'tip', hidden: true });
+  const live = h('p', { class: 'sr-only', 'aria-live': 'polite' });
+  const ticks = [0, 1, 2, 3, 4];
+  const plot = h('div', { class: 'plot', tabindex: '0', 'aria-label': t('chartLabel')(title) },
+    ticks.map(tick => h('div', { class: tick ? 'tick' : 'tick base', style: `bottom:${tick * 25}%` })),
+    bars, tip, max ? null : h('p', { class: 'plot-empty' }, t('emptyRange')));
+  // The value axis stays outside the scrolling area so wide charts keep it in view.
+  const valueAxis = h('div', { class: 'y-axis', 'aria-hidden': 'true' },
+    ticks.map(tick => h('span', { class: 'num', style: `bottom:${tick * 25}%` }, formatAxis(step * tick))));
+  let active = null;
+  const show = index => {
+    if (active !== null) bars.children[active].classList.remove('active');
+    active = index;
+    bars.children[index].classList.add('active');
+    const heading = periodLabel(keys[index], granularity, false, range);
+    const parts = series.filter(item => item.values[index] > 0).sort((a, b) => b.values[index] - a.values[index]);
+    tip.replaceChildren(
+      h('p', { class: 'small muted' }, heading),
+      h('p', { class: 'tip-value num' }, formatAmount(totals[index])),
+      h('div', { class: 'tip-rows' }, parts.map(item => h('div', { class: 'tip-row' },
+        h('span', { class: 'tip-key', style: `background:${seriesColor(state.group, item.id)}` }),
+        h('span', { class: 'ellipsis' }, label(state.group, item.id)),
+        h('span', { class: 'num' }, formatAmount(item.values[index]))))));
+    const position = (index + 0.5) / keys.length;
+    tip.style.left = `${position * 100}%`;
+    tip.style.transform = `translateX(${position < 0.2 ? -12 : position > 0.8 ? -88 : -50}%)`;
+    tip.hidden = false;
+    live.textContent = `${heading}: ${formatAmount(totals[index])}`;
+  };
+  const hide = () => {
+    if (active !== null) bars.children[active].classList.remove('active');
+    active = null;
+    tip.hidden = true;
+  };
+  const drill = index => {
+    if (drillable) update({ day: keys[index], session: null });
+  };
+  const indexOf = event => event.target.closest('.bar')?.dataset.index;
+  bars.addEventListener('pointermove', event => {
+    const index = indexOf(event);
+    if (index !== undefined && Number(index) !== active) show(Number(index));
+  });
+  bars.addEventListener('pointerleave', hide);
+  bars.addEventListener('click', event => {
+    const index = indexOf(event);
+    if (index !== undefined) drill(Number(index));
+  });
+  plot.addEventListener('focus', () => show(active ?? Math.max(0, totals.findLastIndex(total => total > 0))));
+  plot.addEventListener('blur', hide);
+  plot.addEventListener('keydown', event => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
       event.preventDefault();
-      if (menuState.key !== key) showMenu(key, controls[key].value);
-      else setActiveOption(key, menuState.active + (event.key === 'ArrowDown' ? 1 : -1));
-    } else if (event.key === 'Enter' && menuState.key === key) {
-      event.preventDefault();
-      if (menuState.values.length) toggleChoice(key, menuState.values[menuState.active]);
-      else hideMenu(key);
-    } else if (event.key === 'Escape' && menuState.key === key) {
-      event.preventDefault();
-      hideMenu(key);
+      show(Math.min(keys.length - 1, Math.max(0, (active ?? 0) + (event.key === 'ArrowRight' ? 1 : -1))));
+    } else if (event.key === 'Enter' && active !== null) {
+      drill(active);
     }
   });
-  controls[key].addEventListener('blur', () => hideMenu(key));
+  // Labels sit about 90px apart on a desktop-wide chart; multi-day hourly charts label each midnight.
+  const slot = Math.max(MIN_SLOT, 1200 / keys.length);
+  let every = granularity === 'hour' && range.days === 1 ? 3 : Math.max(1, Math.ceil(90 / slot));
+  if (granularity === 'hour' && range.days > 1) every = 24 * Math.ceil(every / 24);
+  const axis = h('div', { class: 'x-axis', 'aria-hidden': 'true' }, keys.map((key, index) => (index % every ? null
+    : h('span', { class: 'num', style: `left:${((index + 0.5) / keys.length) * 100}%` }, periodLabel(key, granularity, true, range)))));
+  const scroller = h('div', { class: 'chart-scroll' },
+    h('div', { class: 'chart-inner', style: `min-width:${Math.max(544, keys.length * MIN_SLOT)}px` }, plot, axis, live));
+  // A chart wider than the page opens at the latest period.
+  if (keys.length * MIN_SLOT > 1200) requestAnimationFrame(() => { scroller.scrollLeft = scroller.scrollWidth; });
+  return h('div', { class: 'chart' }, valueAxis, scroller);
 }
-for (const key of ['metric', 'range']) controls[key].addEventListener('change', () => { refreshChoices(); render(); });
-controls.granularity.addEventListener('change', () => render());
-document.getElementById('language').addEventListener('change', event => setLanguage(event.target.value, true));
-document.getElementById('refresh').addEventListener('click', () => load(true));
-for (const [id, step] of [['series-previous', -1], ['series-next', 1]]) document.getElementById(id).addEventListener('click', () => {
-  seriesPage += step;
-  isolatedSeriesId = null;
-  render(false);
+
+function rankSub(key, value, totals) {
+  const cache = t('cacheShort')(fmt.percent(cacheShare(totals), 0));
+  if (key === 'model') {
+    const price = totals.cost > 0 ? t('perMillion')(fmt.cost((totals.cost / totalTokens(totals)) * 1e6)) : t('noPrice');
+    return `${price} · ${cache}`;
+  }
+  if (key === 'tool') return `${t('sessionCount')(fmt.int(totals.sessions.size))} · ${cache}`;
+  const merged = snapshot.projects.get(value)?.length ?? 0;
+  return [
+    t('sessionCount')(fmt.int(totals.sessions.size)),
+    t('lastActive')(fmt.md([...totals.dates].sort().at(-1))),
+    merged > 1 ? t('mergedPaths')(merged) : null,
+  ].filter(Boolean).join(' · ');
+}
+
+function rankCard(view, key, number) {
+  const groups = [...groupRows(view.rows, row => row[key])].sort((a, b) => amount(b[1]) - amount(a[1]));
+  const max = groups.length ? amount(groups[0][1]) : 0;
+  return h('div', { class: 'card rank' },
+    sectionHead(number, t(key), null, h('span', { class: 'small muted' }, t('clickToFilter'))),
+    groups.slice(0, 6).map(([value, totals]) => h('button', {
+      type: 'button', class: 'rank-row', 'aria-pressed': String(state.filters[key].has(value)), 'data-focus': `rank:${key}:${value}`,
+      title: key === 'project' ? projectTitle(value) : label(key, value), onclick: () => toggleFilter(key, value),
+    },
+    h('span', { class: 'rank-name' }, key === state.group ? swatch(seriesColor(key, value)) : null, h('span', { class: 'ellipsis' }, label(key, value))),
+    h('span', { class: 'rank-value num' }, formatAmount(amount(totals))),
+    h('span', { class: 'rank-meter' },
+      h('span', { class: 'track', 'aria-hidden': 'true' }, h('span', { class: 'fill', style: `width:${max > 0 ? (amount(totals) / max) * 100 : 0}%` })),
+      h('span', { class: 'rank-sub num' }, rankSub(key, value, totals))))),
+    groups.length ? null : h('p', { class: 'menu-empty' }, t('noUsage')),
+    h('button', { type: 'button', class: 'link more', onclick: () => update({ view: 'breakdown', dim: key }) }, t('allOf')(fmt.int(groups.length), t(key))));
+}
+
+function heatSection(view) {
+  const grid = weekdayHourGrid(view.rows, state.metric);
+  const other = state.metric === 'cost' ? 'tokens' : 'cost';
+  const otherGrid = weekdayHourGrid(view.rows, other);
+  const total = grid.flat().reduce((sum, value) => sum + value, 0);
+  let max = 0;
+  let peak = null;
+  grid.forEach((line, day) => line.forEach((value, hour) => {
+    if (value > max) {
+      max = value;
+      peak = [day, hour];
+    }
+  }));
+  const level = value => (value > 0 ? 1 + Math.min(5, Math.floor((value / max) * 6)) : 0);
+  const hour = value => String(value).padStart(2, '0');
+  const cells = h('div', { class: 'heat-grid', tabindex: '0', 'aria-label': t('rhythmLabel') },
+    h('span', { class: 'heat-day' }),
+    Array.from({ length: 24 }, (_, value) => h('span', { class: 'heat-hour num' }, value % 3 ? '' : String(value))),
+    grid.map((line, day) => [
+      h('span', { class: 'heat-day' }, fmt.weekdays[day]),
+      line.map((value, index) => h('span', { class: 'heat-cell', 'data-day': day, 'data-hour': index, style: `background:var(--heat-${level(value)})` })),
+    ]));
+  const tip = h('div', { class: 'tip', hidden: true });
+  const live = h('p', { class: 'sr-only', 'aria-live': 'polite' });
+  const card = h('section', { class: 'card heat' },
+    sectionHead('05', t('rhythm'), null,
+      h('span', { class: 'small muted' }, peak ? t('peak')(fmt.weekdays[peak[0]], hour(peak[1])) : t('noUsage'))),
+    h('div', { class: 'chart-scroll' }, cells),
+    h('div', { class: 'heat-legend', 'aria-hidden': 'true' },
+      h('span', {}, t('less')), [1, 2, 3, 4, 5, 6].map(step => swatch(`var(--heat-${step})`)), h('span', {}, t('more')), h('span', {}, t('rhythmNote'))),
+    tip, live);
+  let active = null;
+  // The tip lives on the card, outside the scrolling grid, so the top row's tip is not clipped.
+  // Keyboard moves reveal cells that narrow screens have scrolled out of view.
+  const show = (day, index, reveal = false) => {
+    cells.querySelector('.heat-cell.active')?.classList.remove('active');
+    const cell = cells.querySelector(`[data-day="${day}"][data-hour="${index}"]`);
+    cell.classList.add('active');
+    if (reveal) cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    active = [day, index];
+    const value = grid[day][index];
+    const heading = `${fmt.weekdays[day]} ${hour(index)}:00–${hour(index + 1)}:00`;
+    const otherValue = other === 'cost' ? fmt.cost(otherGrid[day][index]) : t('tokenCount')(fmt.compact(otherGrid[day][index]));
+    tip.replaceChildren(
+      h('p', { class: 'small muted' }, heading),
+      h('p', { class: 'tip-value num' }, formatAmount(value)),
+      h('p', { class: 'small muted num' }, `${t('shareOfRange')(fmt.percent(total > 0 ? value / total : 0))} · ${otherValue}`));
+    const cardBox = card.getBoundingClientRect();
+    const cellBox = cell.getBoundingClientRect();
+    const left = cellBox.left - cardBox.left + cellBox.width / 2;
+    tip.style.left = `${left}px`;
+    tip.style.top = `${cellBox.top - cardBox.top - 6}px`;
+    tip.style.transform = `translate(${left < 130 ? -12 : left > cardBox.width - 130 ? -88 : -50}%, -100%)`;
+    tip.hidden = false;
+    live.textContent = `${heading}: ${formatAmount(value)}`;
+  };
+  const hide = () => {
+    cells.querySelector('.heat-cell.active')?.classList.remove('active');
+    active = null;
+    tip.hidden = true;
+  };
+  cells.addEventListener('pointermove', event => {
+    const cell = event.target.closest('.heat-cell');
+    if (!cell) return;
+    const [day, index] = [Number(cell.dataset.day), Number(cell.dataset.hour)];
+    if (active?.[0] !== day || active?.[1] !== index) show(day, index);
+  });
+  cells.addEventListener('pointerleave', hide);
+  cells.addEventListener('focus', () => show(...(active ?? peak ?? [0, 0]), true));
+  cells.addEventListener('blur', hide);
+  cells.addEventListener('keydown', event => {
+    const move = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[event.key];
+    if (!move) return;
+    event.preventDefault();
+    const [day, index] = active ?? [0, 0];
+    show(Math.min(6, Math.max(0, day + move[0])), Math.min(23, Math.max(0, index + move[1])), true);
+  });
+  return card;
+}
+
+function topSessionsSection(view) {
+  const sessions = [...groupRows(view.rows, row => row.session)].filter(([id]) => snapshot.sessions.has(id));
+  const ranked = sessions.sort((a, b) => amount(b[1]) - amount(a[1]));
+  const { count, share } = topTenthShare(sessions.map(([, totals]) => totals.cost));
+  const sort = state.metric === 'cost' ? 'cost' : 'tokens';
+  return h('section', { class: 'card top' },
+    sectionHead('06', state.metric === 'cost' ? t('topByCost') : t('topByTokens'), null,
+      sessions.length ? h('span', { class: 'small muted' }, t('concentration')(fmt.int(count), fmt.percent(share, 0))) : null),
+    ranked.slice(0, 5).map(([id, totals], index) => {
+      const meta = snapshot.sessions.get(id);
+      return h('button', { type: 'button', class: 'top-row', 'data-focus': `top:${id}`, onclick: () => update({ view: 'sessions', sort, session: id, q: '' }) },
+        h('span', { class: 'mono small muted' }, String(index + 1)),
+        h('span', { class: 'ellipsis' },
+          h('span', { class: 'block ellipsis' }, sessionName(meta)),
+          h('span', { class: 'block ellipsis small muted' }, `${label('project', meta.project)} · ${meta.tool} · ${fmt.md(localDateKey(meta.start))}`)),
+        h('span', { class: 'right' },
+          h('span', { class: 'block num', style: 'font-weight:600' }, formatAmount(amount(totals))),
+          h('span', { class: 'block num small muted' }, fmt.duration(sessionMinutes(meta)))));
+    }),
+    sessions.length ? null : h('p', { class: 'menu-empty' }, t('noUsage')),
+    h('button', { type: 'button', class: 'link more', onclick: () => update({ view: 'sessions', sort, session: null }) }, t('viewAllSessions')));
+}
+
+function sessionsView(view) {
+  const modelTokens = new Map();
+  for (const row of view.rows) {
+    if (!modelTokens.has(row.session)) modelTokens.set(row.session, new Map());
+    const models = modelTokens.get(row.session);
+    models.set(row.model, (models.get(row.model) ?? 0) + rowTokens(row));
+  }
+  const query = state.q.trim().toLocaleLowerCase();
+  const sorters = {
+    recent: (a, b) => b.meta.start - a.meta.start,
+    cost: (a, b) => b.totals.cost - a.totals.cost,
+    tokens: (a, b) => totalTokens(b.totals) - totalTokens(a.totals),
+    duration: (a, b) => sessionMinutes(b.meta) - sessionMinutes(a.meta),
+  };
+  const list = [...groupRows(view.rows, row => row.session)]
+    .map(([id, totals]) => ({ id, totals, meta: snapshot.sessions.get(id) }))
+    .filter(item => item.meta && (!query
+      || `${sessionName(item.meta)} ${label('project', item.meta.project)} ${item.meta.project} ${item.meta.tool}`.toLocaleLowerCase().includes(query)))
+    .sort(sorters[state.sort]);
+  const selected = list.find(item => item.id === state.session) ?? list[0];
+  const shown = list.slice(0, sessionLimit);
+  const listCard = h('section', { class: 'card sess-list', 'aria-label': t('sessions') },
+    h('div', { class: 'toolbar' },
+      h('label', { class: 'search' },
+        h('span', { class: 'sr-only' }, t('searchSessions')),
+        svg('svg', { class: 'icon', viewBox: '0 0 16 16', width: 14, height: 14, 'aria-hidden': 'true' }, svg('circle', { cx: 7, cy: 7, r: 4.5 }), svg('path', { d: 'm10.5 10.5 3 3' })),
+        h('input', { type: 'search', value: state.q, placeholder: t('searchSessions'), 'data-focus': 'session-search', oninput: event => update({ q: event.target.value }) })),
+      segmented(t('sort'), SORTS.map(sort => ({ value: sort, label: sort === 'duration' ? t('durationLabel') : t(sort), pressed: state.sort === sort })), sort => update({ sort })),
+      h('span', { class: 'small muted count-label' }, t('sessionCountIn')(fmt.int(list.length), rangeLabel(view.range)))),
+    h('div', { class: 'sess-grid sess-head', 'aria-hidden': 'true' },
+      h('span', {}, t('session')), h('span', { class: 'hide-sm' }, t('started')), h('span', { class: 'hide-sm' }, t('durationLabel')),
+      h('span', { class: 'hide-sm right' }, t('replies')), h('span', { class: 'hide-sm' }, t('models')),
+      h('span', { class: 'hide-sm right' }, t(state.metric === 'cost' ? 'tokens' : 'cost')),
+      h('span', { class: 'hide-sm right' }, t('cached')), h('span', { class: 'right' }, t(state.metric))),
+    shown.map(item => sessionRow(item, modelTokens.get(item.id), item === selected)),
+    list.length ? null : h('p', { class: 'empty' }, t('noMatchingSessions')),
+    h('div', { class: 'list-footer' },
+      h('span', {}, t('showing')(fmt.int(shown.length), fmt.int(list.length))),
+      list.length > shown.length
+        ? h('button', { type: 'button', class: 'link', 'data-focus': 'load-more', onclick: () => { sessionLimit += SESSION_PAGE_SIZE; render(); } }, t('loadMore'))
+        : null));
+  return [h('div', { class: 'sess-layout' }, listCard, sessionDetail(selected))];
+}
+
+function sessionRow(item, modelTokens, selected) {
+  const { meta, totals } = item;
+  const models = [...(modelTokens ?? [])].sort((a, b) => b[1] - a[1]);
+  const tokens = className => h('span', { class: `tokens-cell ${className}` },
+    h('span', { class: 'num' }, fmt.compact(totalTokens(totals))), composition(totals, 'mini-comp'));
+  const cost = className => h('span', { class: `num right ${className}` }, fmt.cost(totals.cost));
+  // The selected metric is the emphasized last column, the only figure left on phones.
+  const [secondary, primary] = state.metric === 'cost' ? [tokens, cost] : [cost, tokens];
+  return h('button', {
+    type: 'button', class: 'sess-grid sess-row', 'aria-pressed': String(selected), 'data-focus': `session:${item.id}`,
+    onclick: () => {
+      update({ session: item.id });
+      // Below 1100px the details stack under the list.
+      if (matchMedia('(max-width: 1100px)').matches) document.querySelector('.detail')?.scrollIntoView({ block: 'start' });
+    },
+  },
+  h('span', { class: 'ellipsis' },
+    h('span', { class: 'sess-name ellipsis' }, sessionName(meta)),
+    h('span', { class: 'block ellipsis muted' }, `${label('project', meta.project)} · ${meta.tool}`)),
+  h('span', { class: 'hide-sm num' }, `${fmt.md(localDateKey(meta.start))} ${fmt.clock(meta.start)}`),
+  h('span', { class: 'hide-sm' }, fmt.duration(sessionMinutes(meta))),
+  h('span', { class: 'hide-sm num right' }, fmt.int(totals.messages)),
+  h('span', { class: 'hide-sm models' },
+    models.slice(0, 2).map(([model]) => h('span', { class: 'model-chip' }, swatch(seriesColor('model', model)), h('span', { class: 'ellipsis' }, label('model', model)))),
+    models.length > 2 ? h('span', { class: 'muted' }, `+${models.length - 2}`) : null),
+  secondary('hide-sm'),
+  h('span', { class: 'hide-sm num right' }, fmt.percent(cacheShare(totals), 0)),
+  primary('value-cell'));
+}
+
+function sessionDetail(item) {
+  if (!item) return h('aside', { class: 'card detail' }, h('p', { class: 'muted' }, t('selectSession')));
+  const { meta } = item;
+  const rows = snapshot.rows.filter(row => row.session === meta.id);
+  const totals = sumRows(rows);
+  const granularity = meta.end - meta.start > 48 * 3600000 ? 'day' : 'hour';
+  const first = periodKey(localDateKey(meta.start), meta.start.getHours(), granularity);
+  const last = periodKey(localDateKey(meta.end), meta.end.getHours(), granularity);
+  const keys = bucketKeys({ first: localDateKey(meta.start), last: localDateKey(meta.end) }, granularity, new Date())
+    .filter(key => key >= first && key <= last);
+  const series = stackedSeries(rows, keys, granularity, 'model', 'tokens', slots.model);
+  const sums = keys.map((_, index) => series.reduce((sum, entry) => sum + entry.values[index], 0));
+  const max = Math.max(0, ...sums);
+  const every = Math.max(1, Math.ceil(keys.length / 8));
+  const models = [...groupRows(rows, row => row.model)].sort((a, b) => totalTokens(b[1]) - totalTokens(a[1]));
+  const sameDay = localDateKey(meta.start) === localDateKey(meta.end);
+  const end = sameDay ? fmt.clock(meta.end) : `${fmt.md(localDateKey(meta.end))} ${fmt.clock(meta.end)}`;
+  const copy = h('button', {
+    type: 'button', class: 'btn',
+    onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(meta.id);
+        copy.textContent = t('copied');
+      } catch {
+        copy.textContent = meta.id;
+      }
+    },
+  }, t('copy'));
+  return h('aside', { class: 'card detail', 'aria-label': t('sessionDetails') },
+    h('div', {},
+      h('p', { class: 'section-no' }, t('sessionDetails')),
+      h('h2', {}, sessionName(meta)),
+      h('p', { class: 'small', style: 'margin-top:6px;color:var(--ink-2)' }, `${meta.tool} · ${fmt.md(localDateKey(meta.start))} ${fmt.clock(meta.start)} – ${end} · ${fmt.duration(sessionMinutes(meta))}`),
+      h('p', { class: 'mono small muted ellipsis', title: projectTitle(meta.project) }, snapshot.projects.has(meta.project) ? meta.project : label('project', meta.project))),
+    h('div', { class: 'detail-stats' },
+      [[t('cost'), fmt.cost(totals.cost)], [t('tokens'), fmt.compact(totalTokens(totals))], [t('replies'), fmt.int(totals.messages)], [t('toolCalls'), fmt.int(totals.toolCalls)]]
+        .map(([name, value]) => h('div', { class: 'stat' }, h('p', { class: 'small muted' }, name), h('p', {}, value)))),
+    h('div', {},
+      h('div', { class: 'section-head' }, h('h3', {}, granularity === 'hour' ? t('tokensPerHour') : t('tokensPerDay')), h('span', { class: 'small muted' }, t('stackedByModel'))),
+      h('div', { class: 'timeline' }, keys.map((key, index) => {
+        const bar = stackBar(series, index, sums[index], max ? (sums[index] / max) * TIMELINE_HEIGHT : 0, 'model');
+        bar.title = `${periodLabel(key, granularity, false, { days: 2 })} · ${fmt.compact(sums[index])}`;
+        return bar;
+      })),
+      h('div', { class: 'timeline-labels', 'aria-hidden': 'true' },
+        keys.map((key, index) => h('span', {}, index % every ? '' : periodLabel(key, granularity, true, { days: 1 }))))),
+    h('div', {},
+      h('h3', {}, t('models')),
+      models.map(([model, modelTotals]) => h('div', { class: 'detail-model' },
+        h('span', { class: 'rank-name' }, swatch(seriesColor('model', model)), h('span', { class: 'ellipsis' }, label('model', model))),
+        h('span', { class: 'num muted' }, `${t('replyCount')(fmt.int(modelTotals.messages))} · ${fmt.compact(totalTokens(modelTotals))}`),
+        h('span', { class: 'num right', style: 'font-weight:600' }, modelTotals.cost > 0 ? fmt.cost(modelTotals.cost) : t('noPrice'))))),
+    h('div', {}, h('h3', {}, t('tokenMix')), composition(totals, 'comp'), compositionLegend(totals)),
+    h('div', { class: 'detail-id' }, h('span', { class: 'mono small muted ellipsis', title: meta.id }, meta.id), copy),
+    h('button', {
+      type: 'button', class: 'btn',
+      onclick: () => update({ view: 'overview', day: null, filters: { tool: new Set(), model: new Set(), project: new Set([meta.project]) } }),
+    }, t('onlyThisProject')));
+}
+
+function breakdownView(view) {
+  const dim = state.dim;
+  const keyOf = dim === 'period' ? row => periodKey(row.date, row.hour, view.granularity) : row => row[dim];
+  const groups = [...groupRows(view.rows, keyOf)].sort(dim === 'period'
+    ? (a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0)
+    : (a, b) => amount(b[1]) - amount(a[1]) || b[1].cost - a[1].cost || totalTokens(b[1]) - totalTokens(a[1]));
+  // Token counts are compact so every column fits; the exact count is the cell's title.
+  const tokens = value => (value ? h('td', { title: fmt.int(value) }, fmt.compact(value)) : h('td', {}, '—'));
+  const share = totals => h('td', {}, amount(view.totals) > 0 ? fmt.percent(amount(totals) / amount(view.totals)) : '—');
+  const costColumn = ['cost', totals => h('td', {}, fmt.cost(totals.cost))];
+  const tokensColumn = ['totalTokens', totals => tokens(totalTokens(totals))];
+  // The selected metric leads the table and its share follows it.
+  const columns = [
+    ...(state.metric === 'cost'
+      ? [costColumn, ['shareOfCost', share], tokensColumn]
+      : [tokensColumn, ['shareOfTokens', share], costColumn]),
+    ['input', totals => tokens(totals.inputTokens)],
+    ['cached', totals => tokens(totals.cachedTokens)],
+    ['output', totals => tokens(totals.outputTokens)],
+    ['reasoning', totals => tokens(totals.reasoningTokens)],
+    ['cacheShare', totals => h('td', {}, fmt.percent(cacheShare(totals)))],
+    ['averagePrice', totals => h('td', {}, totals.cost > 0 ? fmt.cost((totals.cost / totalTokens(totals)) * 1e6) : '—')],
+    ['sessions', totals => h('td', {}, fmt.int(totals.sessions.size))],
+    ['replies', totals => h('td', {}, fmt.int(totals.messages))],
+  ];
+  const cells = totals => columns.map(([, cell]) => cell(totals));
+  const nameCell = key => {
+    if (dim !== 'period') {
+      return h('button', {
+        type: 'button', class: 'row-link', 'aria-pressed': String(state.filters[dim].has(key)), 'data-focus': `breakdown:${key}`,
+        title: dim === 'project' ? projectTitle(key) : null, onclick: () => toggleFilter(dim, key),
+      }, label(dim, key));
+    }
+    const text = periodLabel(key, view.granularity, false, view.range);
+    return view.granularity === 'day'
+      ? h('button', { type: 'button', class: 'row-link', 'data-focus': `breakdown:${key}`, onclick: () => update({ view: 'overview', day: key, session: null }) }, text)
+      : text;
+  };
+  return [h('section', { class: 'card table-card', 'aria-label': t('breakdown') },
+    h('div', { class: 'toolbar' },
+      h('span', { class: 'small muted' }, t('by')),
+      segmented(t('by'), BREAKDOWNS.map(key => ({ value: key, label: t(key), pressed: key === dim })), value => update({ dim: value })),
+      dim === 'period' ? granularityControl(view) : null,
+      h('span', { class: 'small muted' }, [
+        t('rowsIn')(fmt.int(groups.length), rangeLabel(view.range)),
+        ...(dim === 'period' ? [t('onlyActivePeriods')] : [t('sortedBy')[state.metric], t('clickToFilter')]),
+      ].join(' · '))),
+    h('div', { class: 'table-scroll' }, h('table', {},
+      h('thead', {}, h('tr', {},
+        h('th', { scope: 'col' }, dim === 'period' ? t('periodBy')(t('intervals')[view.granularity]) : t(dim)),
+        columns.map(([name]) => h('th', { scope: 'col' }, t(name))))),
+      h('tbody', {}, groups.map(([key, totals]) => h('tr', {}, h('td', { class: 'name-cell' }, nameCell(key)), cells(totals)))),
+      h('tfoot', {}, h('tr', {}, h('td', {}, t('total')), cells(view.totals))))))];
+}
+
+elements.refresh.addEventListener('click', () => load(true));
+elements.language.addEventListener('change', event => setLanguage(event.target.value, true));
+window.addEventListener('hashchange', () => {
+  state = readHash();
+  render();
 });
-for (const [id, step] of [['table-previous', -1], ['table-next', 1]]) document.getElementById(id).addEventListener('click', () => {
-  tablePage += step;
-  renderTable(chartState.periods, chartState.series, chartState.metric, chartState.granularity);
+document.addEventListener('click', () => {
+  if (!openMenu) return;
+  openMenu = null;
+  render();
 });
-setLanguage(language);
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || !openMenu) return;
+  const key = openMenu;
+  openMenu = null;
+  render();
+  document.querySelector(`[data-focus="menu:${key}"]`)?.focus();
+});
+setLanguage(language, false);
 load();

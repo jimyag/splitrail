@@ -63,21 +63,30 @@ Run one command to instantly review all of your CLI coding agent usage.  Upload 
 
 ## Local Web Dashboard
 
-Run `splitrail web` and open `http://127.0.0.1:8765` to view usage trends by hour, day, week, month, or year. The dashboard filters by model, project, tool, metric (total, input, output, cached, reasoning tokens, or cost), and time range. Weeks start on Monday. Use `splitrail web --port 9000` to choose another local port. Browser tabs share the latest loaded snapshot; click Refresh data in the page to reload local usage files. Requests arriving during a scan share its result. The server only listens on the local loopback address; no usage data is uploaded.
+Run `splitrail web` and open `http://127.0.0.1:8765`; use `splitrail web --port 9000` to choose another local port. The server only listens on the local loopback address, and no usage data is uploaded. Browser tabs share the latest loaded snapshot; Refresh rescans local usage files, and requests arriving during a scan share its result.
 
-Type in the model, project, or tool field to narrow its choices, then select any number of values. Selections within one field are combined; selections across fields narrow the results together. Remove a selection using its chip, or choose Clear all in that field.
+One filter row scopes every view: time range (today, last 7, 30, or 90 days, or all), tool, model, project, and metric (estimated cost or tokens). Type in a tool, model, or project menu to narrow its choices, then select any number of values. Selections within one field are combined; fields narrow each other. The view, filters, and selected session live in the URL hash, so reloading or bookmarking the page keeps them.
 
-The model, project, and tool lists show only values with nonzero usage for the selected metric and time range. Empty time periods remain on the chart so gaps in usage are visible.
+- Overview leads with estimated cost compared with the previous period of the same length ("today" compares with yesterday up to the current hour), followed by total tokens with their cached, input, and output mix, sessions, and cache share. A stacked chart shows usage per hour, day, week, or month (weeks start on Monday), grouped by model, tool, or project. Any interval works with any multi-day range; charts too dense for the page scroll sideways and open at the latest period. Empty periods stay visible, and clicking a daily bar drills into that day by hour. Clicking a row in the model, tool, or project ranking adds it to the filters. A weekday × hour heatmap shows when usage happens; hover a cell, or focus the heatmap and use the arrow keys, to see its total, its share of the range, and the other metric. The most expensive sessions show how concentrated spending is. Models whose usage costs $0 are flagged, since their price is probably missing.
+- Sessions lists the sessions in range, searchable by name, project, or tool and sortable by recency, cost, tokens, or duration; the selected metric is the emphasized last column. The detail panel covers the whole session: tokens per hour by model, the model split, the token mix, and the session id.
+- Breakdown is a table by period, project, model, or tool with cost, total tokens, token types, cache share, average price per million tokens, sessions, and replies. The selected metric leads the columns, followed by each row's share of it, and project, model, and tool rows are sorted by it. Token counts are abbreviated; hover a cell for the exact count. Periods without usage are left out.
 
-The trend chart draws a total line plus up to 12 nonzero combinations of the selected projects, models, and tools, ranked by usage. Use the combination page controls to view the remaining combinations. Unselected dimensions are combined. Click a line or legend item to focus it, then click again to restore all lines on the current page. The chart fits the full selected time range and preserves peaks and troughs when reducing dense data. Summary values and the total line always include all matching usage.
+Paths that belong to one repository merge into one project:
 
-The breakdown table shows the current combinations and exact values for periods with nonzero usage in the selected metric, with 100 periods per page, newest first. Its period count and pagination exclude zero-usage periods. Changing filters resets pagination.
+- subdirectories and linked worktrees of a checkout that still exists, since a worktree's `.git` file names its main repository;
+- worktrees under `<repo>/.worktrees/` or `<repo>/.worktree/`, even after they are removed;
+- removed worktrees inside a `<repo>-worktrees/` folder whose main checkout sits in that folder or next to it;
+- paths sharing the project id an analyzer records where a session starts, such as the Git remote Codex CLI stores, which also joins moved clones and renamed remotes.
+
+A merged project is named after its existing path with the most activity; hover it to see every merged path.
+
+Within the selected time range, the five models, tools, or projects with the highest cost keep their colors while other filters change; the rest are grouped as Other.
+
+Token total uses the same definition as the TUI: input + output + cached tokens. Reasoning tokens are shown separately. Costs are estimated from public API prices.
+
+The page supports Chinese and English, follows the system light or dark theme, and fits narrow screens. It starts in your browser's language when supported, and the language selector remembers your choice in this browser.
 
 Frontend data tests run with `node --test src/web/data.test.mjs`; Node is only needed for these tests, not for building or running Splitrail.
-
-Token total uses the same definition as the TUI: input + output + cached tokens. Reasoning tokens are shown separately.
-
-The page supports Chinese and English. It starts in your browser's language when supported, and the language selector remembers your choice in this browser.
 
 ## MCP Server
 
